@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DICOM Workstation</title>
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+<style>
+  :root {
+    --bg: #05070a; --panel: #12161f; --widget: #1c222e; --border: #2a3242;
+    --text: #f0f6fc; --muted: #8b949e; --ax: #58a6ff; --cor: #3fb950; --sag: #d29922; --gold: #e3b341;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+  body { background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; user-select: none; }
+  body.dragover::after {
+    content: "Drop DICOM Series Folder or .dcm Files Anywhere";
+    position: fixed; inset: 12px; border: 2px dashed var(--ax); border-radius: 12px;
+    background: rgba(5, 7, 10, 0.9); color: var(--ax); font-size: 20px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; z-index: 999; pointer-events: none;
+  }
+
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 5px 10px; display: flex; align-items: center; gap: 8px; height: 36px; flex-shrink: 0;
+  }
+  .hud-text {
+    flex: 1; font-family: monospace; font-size: 11.5px; color: var(--gold);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .toggle-btn {
+    background: var(--widget); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; width: auto;
+  }
+  .toggle-btn:hover { background: #2b3446; }
+  .toggle-btn.active { background: #1f3a5f; border-color: var(--ax); color: #fff; }
+
+  .main { flex: 1; display: flex; position: relative; min-height: 0; }
+
+  aside {
+    width: 235px; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 10px; gap: 8px; flex-shrink: 0; z-index: 20;
+  }
+  aside.collapsed { display: none; }
+  aside h3 { font-size: 11px; letter-spacing: 0.08em; color: var(--gold); display: flex; justify-content: space-between; align-items: center; }
+  #studyList { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .study-item { padding: 7px 8px; border-radius: 4px; font-size: 12px; cursor: pointer; color: var(--muted); word-break: break-word; }
+  .study-item:hover { background: var(--widget); color: var(--text); }
+  .study-item.active { background: #1f3a5f; color: var(--text); font-weight: 600; border-left: 3px solid var(--ax); }
+  .btn-row { display: flex; gap: 6px; }
+  button, .file-wrap {
+    position: relative; overflow: hidden; background: var(--widget); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px; padding: 7px 10px; font-size: 12px;
+    cursor: pointer; text-align: center; display: block; width: 100%;
+  }
+  button:hover, .file-wrap:hover { background: #2b3446; }
+  .file-wrap input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+  .btn-primary { background: #238636 !important; border-color: #2ea043 !important; font-weight: 600; }
+  .btn-danger { background: #6e1c1c !important; border-color: #8e2424 !important; flex: 1; }
+
+  .viewports { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 6px; min-width: 0; min-height: 0; }
+  .vp-card {
+    background: #000; border: 1px solid var(--border); border-radius: 6px;
+    display: flex; flex-direction: column; position: relative; overflow: hidden; min-width: 0; min-height: 0;
+  }
+  .vp-title {
+    padding: 4px 8px; font-size: 11.5px; font-weight: 700; text-align: center;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .canvas-wrap {
+    flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; padding: 4px; min-width: 0; min-height: 0;
+  }
+  canvas { cursor: crosshair; display: block; }
+  .lbl {
+    position: absolute; font-size: 11px; font-weight: 700; color: #00ffcc;
+    background: rgba(0,0,0,0.65); padding: 1px 5px; border-radius: 3px; pointer-events: none;
+  }
+  .lbl-t { top: 6px; left: 50%; transform: translateX(-50%); }
+  .lbl-b { bottom: 6px; left: 50%; transform: translateX(-50%); }
+  .lbl-l { left: 6px; top: 50%; transform: translateY(-50%); }
+  .lbl-r { right: 6px; top: 50%; transform: translateY(-50%); }
+
+  .controls-popover {
+    position: fixed; top: 42px; right: 10px; width: 340px; max-width: calc(100vw - 20px);
+    background: rgba(18, 22, 31, 0.96); backdrop-filter: blur(8px);
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75); z-index: 50;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .controls-popover.hidden { display: none; }
+  .pop-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .pop-header span { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--gold); }
+  .pop-close { width: auto; padding: 2px 8px; font-size: 11px; }
+  .sliders { display: flex; flex-direction: column; gap: 7px; }
+  .slider-row { display: grid; grid-template-columns: 78px 1fr 56px; align-items: center; gap: 8px; font-size: 11.5px; }
+  input[type="range"] { width: 100%; accent-color: var(--ax); cursor: pointer; }
+  .val-readout { font-family: monospace; color: var(--muted); text-align: right; font-size: 11px; }
+  .cmap-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .span-2 { grid-column: span 2; }
+
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 16px; width: 680px; max-width: 92vw; max-height: 80vh; }
+  dialog::backdrop { background: rgba(0,0,0,0.75); }
+  pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow: auto; max-height: 60vh; font-size: 11px; margin-top: 10px; color: #c9d1d9; }
+</style>
+</head>
+<body>
+
+<header>
+  <button id="btnToggleStudies" class="toggle-btn active" title="Toggle Studies Drawer (S)">☰ Studies</button>
+  <div id="hud" class="hud-text">READY  |  Click "+ Load Series Folder" or drag &amp; drop a DICOM folder anywhere.</div>
+  <button id="btnToggleControls" class="toggle-btn" title="Toggle Controls & Windowing (W)">⚙ Controls</button>
+</header>
+
+<div class="main">
+  <aside id="studiesDrawer">
+    <h3>
+      <span>LOADED STUDIES</span>
+      <button id="btnHideStudies" class="pop-close">Hide</button>
+    </h3>
+    <div id="studyList"><div style="color:var(--muted);font-size:12px;padding:12px;text-align:center;">No studies loaded</div></div>
+    <div class="file-wrap btn-primary">+ Load Series Folder
+      <input type="file" id="folderInput" webkitdirectory directory multiple />
+    </div>
+    <div class="file-wrap">+ Load .dcm File(s) (Cmd+A)
+      <input type="file" id="fileInput" multiple />
+    </div>
+    <div class="btn-row">
+      <button id="btnRename" style="flex:1;">Rename</button>
+      <button id="btnRemove" class="btn-danger">Remove</button>
+    </div>
+  </aside>
+
+  <section class="viewports">
+    <div class="vp-card">
+      <div class="vp-title" id="titleAx" style="color:var(--ax);">AXIAL (Z)</div>
+      <div class="canvas-wrap">
+        <canvas id="cvAx"></canvas>
+        <span class="lbl lbl-t" id="axT">A</span><span class="lbl lbl-b" id="axB">P</span>
+        <span class="lbl lbl-l" id="axL">R</span><span class="lbl lbl-r" id="axR">L</span>
+      </div>
+    </div>
+    <div class="vp-card">
+      <div class="vp-title" id="titleCor" style="color:var(--cor);">CORONAL (Y)</div>
+      <div class="canvas-wrap">
+        <canvas id="cvCor"></canvas>
+        <span class="lbl lbl-t" id="corT">S</span><span class="lbl lbl-b" id="corB">I</span>
+        <span class="lbl lbl-l" id="corL">R</span><span class="lbl lbl-r" id="corR">L</span>
+      </div>
+    </div>
+    <div class="vp-card">
+      <div class="vp-title" id="titleSag" style="color:var(--sag);">SAGITTAL (X)</div>
+      <div class="canvas-wrap">
+        <canvas id="cvSag"></canvas>
+        <span class="lbl lbl-t" id="sagT">S</span><span class="lbl lbl-b" id="sagB">I</span>
+        <span class="lbl lbl-l" id="sagL">A</span><span class="lbl lbl-r" id="sagR">P</span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="controlsPopover" class="controls-popover hidden">
+  <div class="pop-header">
+    <span>CONTROLS &amp; WINDOWING</span>
+    <button id="btnCloseControls" class="pop-close">✕</button>
+  </div>
+  <div class="sliders">
+    <div class="slider-row"><span>Axial (Z)</span><input type="range" id="slZ" min="0" max="0" value="0" /><span class="val-readout" id="valZ">0/0</span></div>
+    <div class="slider-row"><span style="color:var(--cor);">Coronal (Y)</span><input type="range" id="slY" min="0" max="0" value="0" style="accent-color:var(--cor);" /><span class="val-readout" id="valY">0/0</span></div>
+    <div class="slider-row"><span style="color:var(--sag);">Sagittal (X)</span><input type="range" id="slX" min="0" max="0" value="0" style="accent-color:var(--sag);" /><span class="val-readout" id="valX">0/0</span></div>
+    <div class="slider-row"><span>Black Point</span><input type="range" id="slMin" step="any" min="0" max="1" value="0" /><span class="val-readout" id="valMin">0</span></div>
+    <div class="slider-row"><span>White Point</span><input type="range" id="slMax" step="any" min="0" max="1" value="1" /><span class="val-readout" id="valMax">1</span></div>
+  </div>
+  <div class="cmap-row">
+    <span style="color:var(--gold);font-weight:700;">COLORMAP</span>
+    <select id="cmapSelect" style="flex:1;background:var(--widget);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:5px;">
+      <option value="gray">Grayscale</option>
+      <option value="hot">Hot</option>
+      <option value="viridis">Viridis</option>
+      <option value="bone">Bone</option>
+    </select>
+  </div>
+  <div class="actions">
+    <button id="btnCenter">Center Cuts (C)</button>
+    <button id="btnAutoWin">Auto Window (R)</button>
+    <button id="btnTags" class="span-2">Inspect DICOM Tags</button>
+  </div>
+</div>
+
+<dialog id="tagModal">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <strong style="color:var(--gold);">DICOM Header Metadata</strong>
+    <button onclick="document.getElementById('tagModal').close()">Close</button>
+  </div>
+  <pre id="tagContent"></pre>
+</dialog>
+
+<script>
+const studies = new Map();
+let activeId = null;
+const state = { z: 0, y: 0, x: 0, roiStats: "Drag box on any view for ROI stats", roi: null, cursorStr: "" };
+const els = {
+  hud: document.getElementById("hud"), studyList: document.getElementById("studyList"),
+  studiesDrawer: document.getElementById("studiesDrawer"),
+  btnToggleStudies: document.getElementById("btnToggleStudies"),
+  controlsPopover: document.getElementById("controlsPopover"),
+  btnToggleControls: document.getElementById("btnToggleControls"),
+  cvAx: document.getElementById("cvAx"), cvCor: document.getElementById("cvCor"), cvSag: document.getElementById("cvSag"),
+  slZ: document.getElementById("slZ"), slY: document.getElementById("slY"), slX: document.getElementById("slX"),
+  slMin: document.getElementById("slMin"), slMax: document.getElementById("slMax"),
+  valZ: document.getElementById("valZ"), valY: document.getElementById("valY"), valX: document.getElementById("valX"),
+  valMin: document.getElementById("valMin"), valMax: document.getElementById("valMax"),
+};
+
+function toggleStudiesDrawer(forceState = null) {
+  const shouldOpen = forceState !== null ? forceState : els.studiesDrawer.classList.contains("collapsed");
+  els.studiesDrawer.classList.toggle("collapsed", !shouldOpen);
+  els.btnToggleStudies.classList.toggle("active", shouldOpen);
+  requestAnimationFrame(renderAll);
+}
+
+function toggleControlsPopover(forceState = null) {
+  const shouldOpen = forceState !== null ? forceState : els.controlsPopover.classList.contains("hidden");
+  els.controlsPopover.classList.toggle("hidden", !shouldOpen);
+  els.btnToggleControls.classList.toggle("active", shouldOpen);
+}
+
+els.btnToggleStudies.onclick = () => toggleStudiesDrawer();
+document.getElementById("btnHideStudies").onclick = () => toggleStudiesDrawer(false);
+els.btnToggleControls.onclick = () => toggleControlsPopover();
+document.getElementById("btnCloseControls").onclick = () => toggleControlsPopover(false);
+
+const offCanvas = document.createElement("canvas");
+const offCtx = offCanvas.getContext("2d");
+
+function buildLUT(name) {
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255; let r = i, g = i, b = i;
+    if (name === "hot") {
+      r = Math.min(255, Math.round(255 * Math.min(1, t * 2.7)));
+      g = Math.min(255, Math.round(255 * Math.max(0, Math.min(1, (t - 0.37) * 2.7))));
+      b = Math.min(255, Math.round(255 * Math.max(0, (t - 0.74) * 3.8)));
+    } else if (name === "bone") {
+      r = Math.round(255 * (t < 0.75 ? (7 / 8) * t : (7 / 8) * t + (t - 0.75) * 0.5));
+      g = Math.round(255 * (t < 0.375 ? (7 / 8) * t : t < 0.75 ? (7 / 8) * t + (t - 0.375) / 3 : (7 / 8) * t + 0.125));
+      b = Math.round(255 * (t < 0.375 ? (7 / 8) * t + t / 3 : (7 / 8) * t + 0.125));
+    } else if (name === "viridis") {
+      r = Math.round(255 * Math.min(1, Math.max(0, -0.35 + 1.4 * t * t)));
+      g = Math.round(255 * Math.sin(Math.PI * Math.pow(t, 0.85)) * 0.85 + 30 * t);
+      b = Math.round(255 * (0.33 + 0.55 * Math.sin(Math.PI * (t + 0.15)) * (1 - 0.6 * t)));
+    }
+    lut[i * 3] = r; lut[i * 3 + 1] = g; lut[i * 3 + 2] = b;
+  }
+  return lut;
+}
+let currentLUT = buildLUT("gray");
+
+function dominantAxis(vec) {
+  const abs = vec.map(Math.abs);
+  const axis = abs.indexOf(Math.max(...abs));
+  return { axis, sign: vec[axis] >= 0 ? 1 : -1 };
+}
+
+async function parseDicomFiles(fileList, overrideFolderName = null) {
+  const files = Array.from(fileList).filter(f => !f.name.startsWith(".") && f.name !== "DICOMDIR");
+  if (!files.length) return;
+
+  els.hud.textContent = `SCANNING  |  Found ${files.length} file(s)...`;
+  const slices = [];
+  let folderName = overrideFolderName || "DICOM Study";
+  let skipped = 0;
+
+  for (let idx = 0; idx < files.length; idx++) {
+    const file = files[idx];
+    if (!overrideFolderName && file.webkitRelativePath) {
+      const parts = file.webkitRelativePath.split("/");
+      folderName = parts.length > 2 ? parts[parts.length - 2] : parts[0];
+    } else if (!overrideFolderName && files.length === 1) {
+      folderName = file.name;
+    }
+
+    try {
+      const buf = await file.arrayBuffer();
+      const byteArray = new Uint8Array(buf);
+      const ds = window.dicomParser.parseDicom(byteArray);
+      const pixelEl = ds.elements.x7fe00010;
+      if (!pixelEl || pixelEl.encapsulatedPixelData) { skipped++; continue; }
+
+      const rows = ds.uint16("x00280010");
+      const cols = ds.uint16("x00280011");
+      if (!rows || !cols) { skipped++; continue; }
+
+      const bits = ds.uint16("x00280100") || 16;
+      const rep = ds.uint16("x00280103") || 0;
+      const numFrames = parseInt(ds.string("x00280008")) || 1;
+      const slope = parseFloat(ds.string("x00281053")) || 1.0;
+      const intercept = parseFloat(ds.string("x00281052")) || 0.0;
+      const instNum = parseInt(ds.string("x00200013")) || idx;
+      const ippStr = ds.string("x00200032");
+      const ipp = ippStr ? ippStr.split("\\").map(Number) : null;
+
+      const tagLines = [];
+      for (const k in ds.elements) {
+        const v = ds.string(k);
+        if (v && v.length < 120) tagLines.push(`${k}: ${v}`);
+      }
+      const headerText = tagLines.join("\n");
+
+      const numPixels = rows * cols;
+      const bytesPerFrame = numPixels * (bits === 8 ? 1 : 2);
+
+      for (let f = 0; f < numFrames; f++) {
+        const frameOffset = pixelEl.dataOffset + f * bytesPerFrame;
+        if (frameOffset + bytesPerFrame > buf.byteLength) break;
+        const floatSlice = new Float32Array(numPixels);
+        if (bits === 16) {
+          const view = new DataView(buf, frameOffset, bytesPerFrame);
+          for (let i = 0; i < numPixels; i++) {
+            const raw = rep === 1 ? view.getInt16(i * 2, true) : view.getUint16(i * 2, true);
+            floatSlice[i] = raw * slope + intercept;
+          }
+        } else if (bits === 8) {
+          for (let i = 0; i < numPixels; i++) {
+            floatSlice[i] = byteArray[frameOffset + i] * slope + intercept;
+          }
+        }
+        slices.push({
+          rows, cols, instNum: numFrames > 1 ? f : instNum, ipp: numFrames > 1 ? null : ipp,
+          data: floatSlice,
+          psStr: ds.string("x00280030"),
+          spacingBetweenStr: ds.string("x00180088"),
+          thickStr: ds.string("x00180050"),
+          modStr: ds.string("x00080060"),
+          descStr: ds.string("x0008103e"),
+          iopStr: ds.string("x00200037"),
+          headerText
+        });
+      }
+    } catch (_) {
+      skipped++;
+    }
+  }
+
+  if (!slices.length) {
+    els.hud.textContent = "READY  |  No readable DICOM slices found.";
+    alert(`Loaded 0 slices (${skipped} files skipped). Make sure the folder contains uncompressed .dcm images.`);
+    return;
+  }
+
+  const s0 = slices[0];
+  const iop = s0.iopStr ? s0.iopStr.split("\\").map(Number) : [1, 0, 0, 0, 1, 0];
+  const rowCos = iop.slice(0, 3), colCos = iop.slice(3, 6);
+  const sliceNormal = [
+    rowCos[1]*colCos[2] - rowCos[2]*colCos[1],
+    rowCos[2]*colCos[0] - rowCos[0]*colCos[2],
+    rowCos[0]*colCos[1] - rowCos[1]*colCos[0]
+  ];
+
+  slices.sort((a, b) => {
+    if (a.ipp && b.ipp && a.ipp.length === 3 && b.ipp.length === 3) {
+      const distA = a.ipp[0]*sliceNormal[0] + a.ipp[1]*sliceNormal[1] + a.ipp[2]*sliceNormal[2];
+      const distB = b.ipp[0]*sliceNormal[0] + b.ipp[1]*sliceNormal[1] + b.ipp[2]*sliceNormal[2];
+      return distA - distB;
+    }
+    return a.instNum - b.instNum;
+  });
+
+  const nSl = slices.length, nRow = s0.rows, nCol = s0.cols;
+  const pxSpacing = s0.psStr ? s0.psStr.split("\\").map(v => Math.abs(parseFloat(v))) : [1.0, 1.0];
+  const dy = pxSpacing[0] || 1.0;
+  const dx = pxSpacing[1] || dy;
+
+  let sliceSpacing = Math.abs(parseFloat(s0.spacingBetweenStr)) || Math.abs(parseFloat(s0.thickStr)) || 1.0;
+  if (nSl > 1) {
+    const dists = [];
+    for (let i = 1; i < nSl; i++) {
+      if (slices[i].ipp && slices[i-1].ipp && slices[i].ipp.length === 3) {
+        const d = Math.hypot(
+          slices[i].ipp[0] - slices[i-1].ipp[0],
+          slices[i].ipp[1] - slices[i-1].ipp[1],
+          slices[i].ipp[2] - slices[i-1].ipp[2]
+        );
+        if (d > 0.01) dists.push(d);
+      }
+    }
+    if (dists.length > 0) {
+      dists.sort((a, b) => a - b);
+      sliceSpacing = dists[Math.floor(dists.length / 2)];
+    }
+  }
+
+  const colDom = dominantAxis(rowCos);
+  const rowDom = dominantAxis(colCos);
+  const slDom  = dominantAxis(sliceNormal);
+
+  const axisLens = [0, 0, 0];
+  const axisSpacings = [1, 1, 1];
+  axisLens[colDom.axis] = nCol; axisSpacings[colDom.axis] = dx;
+  axisLens[rowDom.axis] = nRow; axisSpacings[rowDom.axis] = dy;
+  axisLens[slDom.axis]  = nSl;  axisSpacings[slDom.axis]  = sliceSpacing;
+
+  const [nx, ny, nz] = axisLens;
+  const [spX, spY, spZ] = axisSpacings;
+  const volume = new Float32Array(nz * ny * nx);
+  let minVal = Infinity, maxVal = -Infinity;
+
+  for (let s = 0; s < nSl; s++) {
+    const sl = slices[s].data;
+    const sLPS = slDom.sign > 0 ? s : (nSl - 1 - s);
+    for (let r = 0; r < nRow; r++) {
+      const rLPS = rowDom.sign > 0 ? r : (nRow - 1 - r);
+      for (let c = 0; c < nCol; c++) {
+        const cLPS = colDom.sign > 0 ? c : (nCol - 1 - c);
+        const coords = [0, 0, 0];
+        coords[colDom.axis] = cLPS;
+        coords[rowDom.axis] = rLPS;
+        coords[slDom.axis]  = sLPS;
+        const val = sl[r * nCol + c];
+        if (val < minVal) minVal = val;
+        if (val > maxVal) maxVal = val;
+        volume[coords[2] * ny * nx + coords[1] * nx + coords[0]] = val;
+      }
+    }
+  }
+
+  const modality = s0.modStr || "MR/CT";
+  const seriesDesc = s0.descStr || folderName;
+  const id = String(Date.now()) + Math.random();
+  studies.set(id, {
+    id, label: `${folderName} (${modality}, ${nSl} sl)`, volume, nz, ny, nx, minVal, maxVal,
+    spX, spY, spZ, modality, seriesDesc, headerText: s0.headerText
+  });
+  selectStudy(id);
+}
+
+function renderStudySidebar() {
+  els.studyList.innerHTML = "";
+  if (!studies.size) { els.studyList.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:12px;text-align:center;">No studies loaded</div>`; return; }
+  for (const [id, st] of studies) {
+    const div = document.createElement("div");
+    div.className = "study-item" + (id === activeId ? " active" : "");
+    div.textContent = st.label; div.onclick = () => selectStudy(id);
+    els.studyList.appendChild(div);
+  }
+}
+
+window.addEventListener("resize", renderAll);
+
+function selectStudy(id) {
+  activeId = id; renderStudySidebar();
+  const st = studies.get(activeId); if (!st) return;
+  state.z = Math.floor(st.nz / 2); state.y = Math.floor(st.ny / 2); state.x = Math.floor(st.nx / 2);
+  state.roi = null; state.roiStats = "Drag box on any view for ROI stats";
+  els.slZ.max = st.nz - 1; els.slZ.value = state.z;
+  els.slY.max = st.ny - 1; els.slY.value = state.y;
+  els.slX.max = st.nx - 1; els.slX.value = state.x;
+  els.slMin.min = st.minVal; els.slMin.max = st.maxVal;
+  els.slMax.min = st.minVal; els.slMax.max = st.maxVal;
+  autoWindow();
+  renderAll();
+}
+
+function autoWindow() {
+  const st = studies.get(activeId); if (!st) return;
+  const off = state.z * st.ny * st.nx;
+  const sub = Array.from(st.volume.subarray(off, off + st.ny * st.nx)).sort((a, b) => a - b);
+  els.slMin.value = sub[Math.floor(sub.length * 0.01)];
+  els.slMax.value = sub[Math.floor(sub.length * 0.99)];
+}
+
+function drawSlice(canvas, voxW, voxH, spW, spH, getPixel, chX, chY, planeName) {
+  canvas.dataset.voxW = voxW;
+  canvas.dataset.voxH = voxH;
+
+  offCanvas.width = voxW;
+  offCanvas.height = voxH;
+  const imgData = offCtx.createImageData(voxW, voxH);
+  const data = imgData.data;
+
+  const vmin = parseFloat(els.slMin.value);
+  const vmax = Math.max(parseFloat(els.slMax.value), vmin + 1e-3);
+  const scale = 255 / (vmax - vmin);
+
+  for (let row = 0; row < voxH; row++) {
+    for (let col = 0; col < voxW; col++) {
+      const val = getPixel(col, row);
+      const norm = Math.max(0, Math.min(255, Math.round((val - vmin) * scale)));
+      const idx = (row * voxW + col) * 4;
+      data[idx] = currentLUT[norm * 3];
+      data[idx + 1] = currentLUT[norm * 3 + 1];
+      data[idx + 2] = currentLUT[norm * 3 + 2];
+      data[idx + 3] = 255;
+    }
+  }
+  offCtx.putImageData(imgData, 0, 0);
+
+  const wrap = canvas.parentElement;
+  const availW = Math.max(64, wrap.clientWidth - 8);
+  const availH = Math.max(64, wrap.clientHeight - 8);
+  const physW = voxW * spW;
+  const physH = voxH * spH;
+  const fitScale = Math.min(availW / physW, availH / physH);
+
+  const dispW = Math.round(physW * fitScale);
+  const dispH = Math.round(physH * fitScale);
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.style.width = `${dispW}px`;
+  canvas.style.height = `${dispH}px`;
+  canvas.width = Math.round(dispW * dpr);
+  canvas.height = Math.round(dispH * dpr);
+
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
+
+  const sx = canvas.width / voxW;
+  const sy = canvas.height / voxH;
+  const cxPx = Math.round((chX + 0.5) * sx) + 0.5;
+  const cyPx = Math.round((chY + 0.5) * sy) + 0.5;
+
+  ctx.strokeStyle = "rgba(0, 255, 255, 0.8)";
+  ctx.lineWidth = Math.max(1, dpr);
+  ctx.beginPath();
+  ctx.moveTo(0, cyPx); ctx.lineTo(canvas.width, cyPx);
+  ctx.moveTo(cxPx, 0); ctx.lineTo(cxPx, canvas.height);
+  ctx.stroke();
+
+  if (state.roi && state.roi.plane === planeName) {
+    const { x1, y1, x2, y2 } = state.roi;
+    ctx.fillStyle = "rgba(57, 211, 83, 0.22)";
+    ctx.strokeStyle = "#39d353";
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.fillRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+    ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+  }
+}
+
+function renderAll() {
+  const st = studies.get(activeId); if (!st) return;
+  const { volume, nz, ny, nx, spX, spY, spZ } = st, { z, y, x } = state;
+
+  drawSlice(els.cvAx,  nx, ny, spX, spY, (col, row) => volume[z * ny * nx + row * nx + col], x, y, "Axial");
+  drawSlice(els.cvCor, nx, nz, spX, spZ, (col, row) => volume[(nz - 1 - row) * ny * nx + y * nx + col], x, nz - 1 - z, "Coronal");
+  drawSlice(els.cvSag, ny, nz, spY, spZ, (col, row) => volume[(nz - 1 - row) * ny * nx + col * nx + x], y, nz - 1 - z, "Sagittal");
+
+  document.getElementById("titleAx").textContent = `AXIAL (Z: ${z + 1}/${nz})`;
+  document.getElementById("titleCor").textContent = `CORONAL (Y: ${y + 1}/${ny})`;
+  document.getElementById("titleSag").textContent = `SAGITTAL (X: ${x + 1}/${nx})`;
+  els.valZ.textContent = `${z + 1}/${nz}`; els.valY.textContent = `${y + 1}/${ny}`; els.valX.textContent = `${x + 1}/${nx}`;
+  els.valMin.textContent = Math.round(els.slMin.value); els.valMax.textContent = Math.round(els.slMax.value);
+  const val = volume[z * ny * nx + y * nx + x];
+  els.hud.textContent = `[${st.label}] ${st.seriesDesc} | Voxel (${x+1},${y+1},${z+1}) | Val: ${val.toFixed(1)} | ${state.roiStats} ${state.cursorStr}`;
+}
+
+function setupCanvasInteraction(canvas, plane) {
+  let dragging = false, startX = 0, startY = 0;
+  const getCoords = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const voxW = parseInt(canvas.dataset.voxW) || 1;
+    const voxH = parseInt(canvas.dataset.voxH) || 1;
+    const cx = Math.floor(((e.clientX - rect.left) / rect.width) * voxW);
+    const cy = Math.floor(((e.clientY - rect.top) / rect.height) * voxH);
+    return [Math.max(0, Math.min(voxW - 1, cx)), Math.max(0, Math.min(voxH - 1, cy))];
+  };
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault(); const st = studies.get(activeId); if (!st) return;
+    const step = e.deltaY < 0 ? 1 : -1;
+    if (plane === "Axial") { state.z = Math.max(0, Math.min(st.nz - 1, state.z + step)); els.slZ.value = state.z; }
+    if (plane === "Coronal") { state.y = Math.max(0, Math.min(st.ny - 1, state.y + step)); els.slY.value = state.y; }
+    if (plane === "Sagittal") { state.x = Math.max(0, Math.min(st.nx - 1, state.x + step)); els.slX.value = state.x; }
+    renderAll();
+  }, { passive: false });
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault(); const st = studies.get(activeId); if (!st) return;
+    const [cx, cy] = getCoords(e);
+    if (plane === "Axial") { state.x = cx; state.y = cy; }
+    if (plane === "Coronal") { state.x = cx; state.z = st.nz - 1 - cy; }
+    if (plane === "Sagittal") { state.y = cx; state.z = st.nz - 1 - cy; }
+    els.slX.value = state.x; els.slY.value = state.y; els.slZ.value = state.z; renderAll();
+  });
+  canvas.addEventListener("mousedown", (e) => { if (e.button === 0 && studies.has(activeId)) { dragging = true; [startX, startY] = getCoords(e); } });
+  window.addEventListener("mousemove", (e) => {
+    const st = studies.get(activeId); if (!st) return;
+    if (e.target === canvas) {
+      const [cx, cy] = getCoords(e); let v = 0;
+      if (plane === "Axial") v = st.volume[state.z * st.ny * st.nx + cy * st.nx + cx];
+      if (plane === "Coronal") v = st.volume[(st.nz - 1 - cy) * st.ny * st.nx + state.y * st.nx + cx];
+      if (plane === "Sagittal") v = st.volume[(st.nz - 1 - cy) * st.ny * st.nx + cx * st.nx + state.x];
+      state.cursorStr = `| Cursor: ${v.toFixed(1)}`; if (!dragging) renderAll();
+    }
+    if (!dragging) return;
+    const [curX, curY] = getCoords(e);
+    const x1 = Math.min(startX, curX), x2 = Math.max(startX, curX), y1 = Math.min(startY, curY), y2 = Math.max(startY, curY);
+    if (x2 - x1 > 1 && y2 - y1 > 1) {
+      state.roi = { plane, x1, y1, x2, y2 }; const vals = [];
+      for (let r = y1; r < y2; r++) for (let c = x1; c < x2; c++) {
+        if (plane === "Axial") vals.push(st.volume[state.z * st.ny * st.nx + r * st.nx + c]);
+        if (plane === "Coronal") vals.push(st.volume[(st.nz - 1 - r) * st.ny * st.nx + state.y * st.nx + c]);
+        if (plane === "Sagittal") vals.push(st.volume[(st.nz - 1 - r) * st.ny * st.nx + c * st.nx + state.x]);
+      }
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+      const snr = sd > 0 ? (mean / sd).toFixed(2) : "Inf";
+      const area = plane === "Axial" ? (x2 - x1) * st.spX * (y2 - y1) * st.spY
+                 : plane === "Coronal" ? (x2 - x1) * st.spX * (y2 - y1) * st.spZ
+                 : (x2 - x1) * st.spY * (y2 - y1) * st.spZ;
+      state.roiStats = `${plane} ROI (${x2-x1}x${y2-y1} px, ${area.toFixed(1)} mm²): Mean=${mean.toFixed(1)} | SD=${sd.toFixed(1)} | SNR=${snr}`;
+      renderAll();
+    }
+  });
+  window.addEventListener("mouseup", () => { dragging = false; });
+}
+
+async function collectFilesFromEntries(items) {
+  const files = [];
+  let rootName = null;
+  async function traverse(entry) {
+    if (entry.isFile) {
+      const f = await new Promise(res => entry.file(res));
+      files.push(f);
+    } else if (entry.isDirectory) {
+      if (!rootName) rootName = entry.name;
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise(res => reader.readEntries(res));
+        for (const child of batch) await traverse(child);
+      } while (batch.length > 0);
+    }
+  }
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    if (entry) await traverse(entry);
+  }
+  if (files.length) parseDicomFiles(files, rootName);
+}
+
+window.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragover"); });
+window.addEventListener("dragleave", (e) => { if (!e.relatedTarget) document.body.classList.remove("dragover"); });
+window.addEventListener("drop", (e) => {
+  e.preventDefault(); document.body.classList.remove("dragover");
+  if (e.dataTransfer.items) collectFilesFromEntries(e.dataTransfer.items);
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  const k = e.key.toLowerCase();
+  if (k === "s") toggleStudiesDrawer();
+  else if (k === "w") toggleControlsPopover();
+  else if (k === "c") document.getElementById("btnCenter").click();
+  else if (k === "r") document.getElementById("btnAutoWin").click();
+});
+
+setupCanvasInteraction(els.cvAx, "Axial"); setupCanvasInteraction(els.cvCor, "Coronal"); setupCanvasInteraction(els.cvSag, "Sagittal");
+document.getElementById("folderInput").onchange = (e) => { if (e.target.files.length) parseDicomFiles(e.target.files); e.target.value = ""; };
+document.getElementById("fileInput").onchange = (e) => { if (e.target.files.length) parseDicomFiles(e.target.files); e.target.value = ""; };
+els.slZ.oninput = () => { state.z = parseInt(els.slZ.value); renderAll(); };
+els.slY.oninput = () => { state.y = parseInt(els.slY.value); renderAll(); };
+els.slX.oninput = () => { state.x = parseInt(els.slX.value); renderAll(); };
+els.slMin.oninput = renderAll; els.slMax.oninput = renderAll;
+document.getElementById("cmapSelect").onchange = (e) => { currentLUT = buildLUT(e.target.value); renderAll(); };
+document.getElementById("btnCenter").onclick = () => {
+  const st = studies.get(activeId); if (!st) return;
+  state.z = Math.floor(st.nz / 2); state.y = Math.floor(st.ny / 2); state.x = Math.floor(st.nx / 2);
+  els.slZ.value = state.z; els.slY.value = state.y; els.slX.value = state.x; renderAll();
+};
+document.getElementById("btnAutoWin").onclick = () => { autoWindow(); renderAll(); };
+document.getElementById("btnTags").onclick = () => {
+  const st = studies.get(activeId); if (!st) return;
+  document.getElementById("tagContent").textContent = st.headerText; document.getElementById("tagModal").showModal();
+};
+document.getElementById("btnRename").onclick = () => {
+  const st = studies.get(activeId); if (!st) return;
+  const name = prompt("Enter a new study name:", st.label);
+  if (name && name.trim()) { st.label = name.trim(); renderStudySidebar(); renderAll(); }
+};
+document.getElementById("btnRemove").onclick = () => {
+  if (!activeId) return; studies.delete(activeId);
+  const next = studies.keys().next().value || null;
+  if (next) selectStudy(next);
+  else { activeId = null; renderStudySidebar(); els.hud.textContent = "READY  |  No studies loaded."; }
+};
+</script>
+</body>
+</html>
