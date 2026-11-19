@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>DICOM Workstation</title>
 <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
   :root {
     --bg: #05070a; --panel: #12161f; --widget: #1c222e; --border: #2a3242;
@@ -13,7 +14,7 @@
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
   body { background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; user-select: none; }
   body.dragover::after {
-    content: "Drop DICOM Series Folder or .dcm Files Anywhere";
+    content: "Drop DICOM Folder, .zip Archive, or .dcm Files Anywhere";
     position: fixed; inset: 12px; border: 2px dashed var(--ax); border-radius: 12px;
     background: rgba(5, 7, 10, 0.9); color: var(--ax); font-size: 20px; font-weight: 700;
     display: flex; align-items: center; justify-content: center; z-index: 999; pointer-events: none;
@@ -109,7 +110,7 @@
 
 <header>
   <button id="btnToggleStudies" class="toggle-btn active" title="Toggle Studies Drawer (S)">☰ Studies</button>
-  <div id="hud" class="hud-text">READY  |  Click "+ Load Series Folder" or drag &amp; drop a DICOM folder anywhere.</div>
+  <div id="hud" class="hud-text">READY  |  Load a DICOM folder, .zip archive, or .dcm files.</div>
   <button id="btnToggleControls" class="toggle-btn" title="Toggle Controls & Windowing (W)">⚙ Controls</button>
 </header>
 
@@ -123,7 +124,7 @@
     <div class="file-wrap btn-primary">+ Load Series Folder
       <input type="file" id="folderInput" webkitdirectory directory multiple />
     </div>
-    <div class="file-wrap">+ Load .dcm File(s) (Cmd+A)
+    <div class="file-wrap">+ Load .dcm / .zip File(s)
       <input type="file" id="fileInput" multiple />
     </div>
     <div class="btn-row">
@@ -263,26 +264,49 @@ function dominantAxis(vec) {
   return { axis, sign: vec[axis] >= 0 ? 1 : -1 };
 }
 
-async function parseDicomFiles(fileList, overrideFolderName = null) {
-  const files = Array.from(fileList).filter(f => !f.name.startsWith(".") && f.name !== "DICOMDIR");
-  if (!files.length) return;
+// Expand any .zip archives into raw ArrayBuffer entries alongside regular files
+async function expandInputs(fileList, overrideFolderName = null) {
+  const rawFiles = Array.from(fileList).filter(f => !f.name.startsWith(".") && f.name !== "DICOMDIR");
+  const items = [];
+  let folderName = overrideFolderName || null;
 
-  els.hud.textContent = `SCANNING  |  Found ${files.length} file(s)...`;
+  for (const file of rawFiles) {
+    if (file.name.toLowerCase().endsWith(".zip")) {
+      if (!window.JSZip) {
+        alert("JSZip library failed to load (check internet connection).");
+        continue;
+      }
+      if (!folderName) folderName = file.name.replace(/\.zip$/i, "");
+      els.hud.textContent = `UNZIPPING  |  Extracting ${file.name}...`;
+      const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+      const entries = Object.values(zip.files).filter(e => !e.dir && !e.name.split("/").pop().startsWith(".") && e.name.split("/").pop() !== "DICOMDIR");
+      for (const entry of entries) {
+        items.push({ name: entry.name.split("/").pop(), buf: await entry.async("arraybuffer") });
+      }
+    } else {
+      if (!folderName && file.webkitRelativePath) {
+        const parts = file.webkitRelativePath.split("/");
+        folderName = parts.length > 2 ? parts[parts.length - 2] : parts[0];
+      } else if (!folderName && rawFiles.length === 1) {
+        folderName = file.name;
+      }
+      items.push({ name: file.name, buf: await file.arrayBuffer() });
+    }
+  }
+  return { items, folderName: folderName || "DICOM Study" };
+}
+
+async function parseDicomFiles(fileList, overrideFolderName = null) {
+  const { items, folderName } = await expandInputs(fileList, overrideFolderName);
+  if (!items.length) return;
+
+  els.hud.textContent = `SCANNING  |  Reading ${items.length} file(s)...`;
   const slices = [];
-  let folderName = overrideFolderName || "DICOM Study";
   let skipped = 0;
 
-  for (let idx = 0; idx < files.length; idx++) {
-    const file = files[idx];
-    if (!overrideFolderName && file.webkitRelativePath) {
-      const parts = file.webkitRelativePath.split("/");
-      folderName = parts.length > 2 ? parts[parts.length - 2] : parts[0];
-    } else if (!overrideFolderName && files.length === 1) {
-      folderName = file.name;
-    }
-
+  for (let idx = 0; idx < items.length; idx++) {
+    const { buf } = items[idx];
     try {
-      const buf = await file.arrayBuffer();
       const byteArray = new Uint8Array(buf);
       const ds = window.dicomParser.parseDicom(byteArray);
       const pixelEl = ds.elements.x7fe00010;
@@ -345,7 +369,7 @@ async function parseDicomFiles(fileList, overrideFolderName = null) {
 
   if (!slices.length) {
     els.hud.textContent = "READY  |  No readable DICOM slices found.";
-    alert(`Loaded 0 slices (${skipped} files skipped). Make sure the folder contains uncompressed .dcm images.`);
+    alert(`Loaded 0 slices (${skipped} files skipped). Make sure the folder or zip archive contains uncompressed .dcm images.`);
     return;
   }
 
