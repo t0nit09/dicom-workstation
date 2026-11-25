@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DICOM Workstation</title>
+<title>Medical Imaging MPR Workstation</title>
 <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
@@ -14,30 +14,41 @@
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
   body { background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; user-select: none; }
   body.dragover::after {
-    content: "Drop DICOM Folder, .zip Archive, or .dcm Files Anywhere";
+    content: "Drop DICOM Folder, .zip Archive, .dcm, or .nii / .nii.gz Anywhere";
     position: fixed; inset: 12px; border: 2px dashed var(--ax); border-radius: 12px;
     background: rgba(5, 7, 10, 0.9); color: var(--ax); font-size: 20px; font-weight: 700;
     display: flex; align-items: center; justify-content: center; z-index: 999; pointer-events: none;
   }
 
+  /* Compact Top Toolbar + Tool Switcher + HUD */
   header {
     background: var(--panel); border-bottom: 1px solid var(--border);
-    padding: 5px 10px; display: flex; align-items: center; gap: 8px; height: 36px; flex-shrink: 0;
+    padding: 5px 10px; display: flex; align-items: center; gap: 6px; height: 38px; flex-shrink: 0;
   }
   .hud-text {
-    flex: 1; font-family: monospace; font-size: 11.5px; color: var(--gold);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    flex: 1; font-family: monospace; font-size: 11px; color: var(--gold);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px;
   }
   .toggle-btn {
     background: var(--widget); color: var(--text); border: 1px solid var(--border);
-    border-radius: 4px; padding: 4px 10px; font-size: 11.5px; font-weight: 600;
+    border-radius: 4px; padding: 4px 8px; font-size: 11px; font-weight: 600;
     cursor: pointer; white-space: nowrap; width: auto;
   }
   .toggle-btn:hover { background: #2b3446; }
   .toggle-btn.active { background: #1f3a5f; border-color: var(--ax); color: #fff; }
+  .tool-group { display: flex; gap: 3px; background: var(--bg); padding: 2px; border-radius: 5px; border: 1px solid var(--border); }
+  .tool-btn {
+    background: transparent; color: var(--muted); border: none; border-radius: 3px;
+    padding: 3px 7px; font-size: 11px; font-weight: 600; cursor: pointer; width: auto;
+  }
+  .tool-btn:hover { color: var(--text); background: var(--widget); }
+  .tool-btn.active { background: #238636; color: #fff; }
+  .tool-clear { color: #f85149; }
+  .tool-clear:hover { background: rgba(248, 81, 73, 0.16); color: #ff7b72; }
 
   .main { flex: 1; display: flex; position: relative; min-height: 0; }
 
+  /* Collapsible Left Studies Drawer */
   aside {
     width: 235px; background: var(--panel); border-right: 1px solid var(--border);
     display: flex; flex-direction: column; padding: 10px; gap: 8px; flex-shrink: 0; z-index: 20;
@@ -59,18 +70,20 @@
   .btn-primary { background: #238636 !important; border-color: #2ea043 !important; font-weight: 600; }
   .btn-danger { background: #6e1c1c !important; border-color: #8e2424 !important; flex: 1; }
 
+  /* Full-Screen 3-Pane Viewports */
   .viewports { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 6px; min-width: 0; min-height: 0; }
   .vp-card {
     background: #000; border: 1px solid var(--border); border-radius: 6px;
     display: flex; flex-direction: column; position: relative; overflow: hidden; min-width: 0; min-height: 0;
   }
+  .vp-card.cine-active { border-color: var(--gold); }
   .vp-title {
     padding: 4px 8px; font-size: 11.5px; font-weight: 700; text-align: center;
-    background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; cursor: pointer;
   }
   .canvas-wrap {
     flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
-    overflow: hidden; padding: 4px; min-width: 0; min-height: 0;
+    overflow: hidden; padding: 4px; min-width: 0; min-height: 0; touch-action: none;
   }
   canvas { cursor: crosshair; display: block; }
   .lbl {
@@ -81,36 +94,77 @@
   .lbl-b { bottom: 6px; left: 50%; transform: translateX(-50%); }
   .lbl-l { left: 6px; top: 50%; transform: translateY(-50%); }
   .lbl-r { right: 6px; top: 50%; transform: translateY(-50%); }
+  .zoom-badge {
+    position: absolute; bottom: 6px; right: 6px; font-size: 10px; font-family: monospace;
+    color: var(--muted); background: rgba(0,0,0,0.7); padding: 1px 5px; border-radius: 3px; pointer-events: none;
+  }
 
+  /* Floating Sub-Window for Controls, Windowing, Presets, Cine & CSV */
   .controls-popover {
-    position: fixed; top: 42px; right: 10px; width: 340px; max-width: calc(100vw - 20px);
+    position: fixed; top: 44px; right: 10px; width: 365px; max-width: calc(100vw - 20px);
+    max-height: calc(100vh - 54px); overflow-y: auto;
     background: rgba(18, 22, 31, 0.96); backdrop-filter: blur(8px);
     border: 1px solid var(--border); border-radius: 8px; padding: 12px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75); z-index: 50;
-    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.78); z-index: 50;
+    display: flex; flex-direction: column; gap: 11px;
   }
   .controls-popover.hidden { display: none; }
   .pop-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
   .pop-header span { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--gold); }
   .pop-close { width: auto; padding: 2px 8px; font-size: 11px; }
-  .sliders { display: flex; flex-direction: column; gap: 7px; }
+  .sec-lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.07em; color: var(--muted); text-transform: uppercase; margin-bottom: -4px; }
+  .sliders { display: flex; flex-direction: column; gap: 6px; }
   .slider-row { display: grid; grid-template-columns: 78px 1fr 56px; align-items: center; gap: 8px; font-size: 11.5px; }
   input[type="range"] { width: 100%; accent-color: var(--ax); cursor: pointer; }
   .val-readout { font-family: monospace; color: var(--muted); text-align: right; font-size: 11px; }
-  .cmap-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+  .cmap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; }
+  .preset-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+  .preset-btn { padding: 5px 4px; font-size: 11px; }
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .span-2 { grid-column: span 2; }
+  .hint-box { font-size: 10.5px; color: var(--muted); background: var(--bg); padding: 7px 8px; border-radius: 5px; border: 1px solid var(--border); line-height: 1.45; }
 
-  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 16px; width: 680px; max-width: 92vw; max-height: 80vh; }
-  dialog::backdrop { background: rgba(0,0,0,0.75); }
-  pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow: auto; max-height: 60vh; font-size: 11px; margin-top: 10px; color: #c9d1d9; }
+  /* Scan Parameters & Tags Modal */
+  dialog {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; width: 780px; max-width: 94vw; max-height: 85vh;
+    margin: auto; user-select: text;
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.78); }
+  .modal-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  .tab-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .tab-btn { width: auto; padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--bg); }
+  .tab-btn.active { background: #1f3a5f; border-color: var(--ax); color: #fff; }
+  .tab-panel { margin-top: 10px; overflow-y: auto; max-height: 62vh; }
+  .tab-panel.hidden { display: none; }
+
+  .param-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+  .param-group { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .param-group h4 { font-size: 11px; letter-spacing: 0.06em; color: var(--ax); margin-bottom: 8px; text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .param-row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 12px; border-bottom: 1px solid rgba(42, 50, 66, 0.45); }
+  .param-row:last-child { border-bottom: none; }
+  .param-k { color: var(--muted); }
+  .param-v { font-family: monospace; color: var(--text); font-weight: 600; text-align: right; word-break: break-word; }
+
+  .tag-search { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; font-size: 12px; margin-bottom: 8px; }
+  pre { background: var(--bg); padding: 10px; border-radius: 6px; overflow: auto; max-height: 54vh; font-size: 11px; color: #c9d1d9; line-height: 1.45; }
 </style>
 </head>
 <body>
 
 <header>
   <button id="btnToggleStudies" class="toggle-btn active" title="Toggle Studies Drawer (S)">☰ Studies</button>
-  <div id="hud" class="hud-text">READY  |  Load a DICOM folder, .zip archive, or .dcm files.</div>
+  <div class="tool-group" title="Active Left-Click Mouse Tool (supports multiple shapes)">
+    <button class="tool-btn active" data-tool="box">▭ Box</button>
+    <button class="tool-btn" data-tool="ellipse">◯ Ellipse</button>
+    <button class="tool-btn" data-tool="ruler">📏 Ruler</button>
+    <button class="tool-btn" data-tool="pan">✋ Pan</button>
+    <button id="btnUndoOverlay" class="tool-btn" title="Undo Last Box, Ellipse, or Ruler (Cmd/Ctrl+Z)">↩ Undo</button>
+    <button id="btnClearOverlays" class="tool-btn tool-clear" title="Clear All Boxes, Ellipses & Rulers (Esc)">✕ Clear</button>
+  </div>
+  <div id="hud" class="hud-text">READY  |  Load a DICOM folder, .zip, .dcm, or .nii / .nii.gz volume.</div>
+  <button id="btnCineQuick" class="toggle-btn" title="Play/Pause Cine Loop (Spacebar)">▶ Cine</button>
+  <button id="btnToggleParams" class="toggle-btn" title="View Scan Parameters & Tags (P)">📊 Params</button>
   <button id="btnToggleControls" class="toggle-btn" title="Toggle Controls & Windowing (W)">⚙ Controls</button>
 </header>
 
@@ -124,7 +178,7 @@
     <div class="file-wrap btn-primary">+ Load Series Folder
       <input type="file" id="folderInput" webkitdirectory directory multiple />
     </div>
-    <div class="file-wrap">+ Load .dcm / .zip File(s)
+    <div class="file-wrap">+ Load .dcm / .zip / .nii(.gz)
       <input type="file" id="fileInput" multiple />
     </div>
     <div class="btn-row">
@@ -134,38 +188,43 @@
   </aside>
 
   <section class="viewports">
-    <div class="vp-card">
-      <div class="vp-title" id="titleAx" style="color:var(--ax);">AXIAL (Z)</div>
+    <div class="vp-card cine-active" id="cardAx">
+      <div class="vp-title" id="titleAx" style="color:var(--ax);" title="Click to target Cine playback">AXIAL (Z)</div>
       <div class="canvas-wrap">
         <canvas id="cvAx"></canvas>
-        <span class="lbl lbl-t" id="axT">A</span><span class="lbl lbl-b" id="axB">P</span>
-        <span class="lbl lbl-l" id="axL">R</span><span class="lbl lbl-r" id="axR">L</span>
+        <span class="lbl lbl-t">A</span><span class="lbl lbl-b">P</span>
+        <span class="lbl lbl-l">R</span><span class="lbl lbl-r">L</span>
+        <span class="zoom-badge" id="zoomAx">1.0x</span>
       </div>
     </div>
-    <div class="vp-card">
-      <div class="vp-title" id="titleCor" style="color:var(--cor);">CORONAL (Y)</div>
+    <div class="vp-card" id="cardCor">
+      <div class="vp-title" id="titleCor" style="color:var(--cor);" title="Click to target Cine playback">CORONAL (Y)</div>
       <div class="canvas-wrap">
         <canvas id="cvCor"></canvas>
-        <span class="lbl lbl-t" id="corT">S</span><span class="lbl lbl-b" id="corB">I</span>
-        <span class="lbl lbl-l" id="corL">R</span><span class="lbl lbl-r" id="corR">L</span>
+        <span class="lbl lbl-t">S</span><span class="lbl lbl-b">I</span>
+        <span class="lbl lbl-l">R</span><span class="lbl lbl-r">L</span>
+        <span class="zoom-badge" id="zoomCor">1.0x</span>
       </div>
     </div>
-    <div class="vp-card">
-      <div class="vp-title" id="titleSag" style="color:var(--sag);">SAGITTAL (X)</div>
+    <div class="vp-card" id="cardSag">
+      <div class="vp-title" id="titleSag" style="color:var(--sag);" title="Click to target Cine playback">SAGITTAL (X)</div>
       <div class="canvas-wrap">
         <canvas id="cvSag"></canvas>
-        <span class="lbl lbl-t" id="sagT">S</span><span class="lbl lbl-b" id="sagB">I</span>
-        <span class="lbl lbl-l" id="sagL">A</span><span class="lbl lbl-r" id="sagR">P</span>
+        <span class="lbl lbl-t">S</span><span class="lbl lbl-b">I</span>
+        <span class="lbl lbl-l">A</span><span class="lbl lbl-r">P</span>
+        <span class="zoom-badge" id="zoomSag">1.0x</span>
       </div>
     </div>
   </section>
 </div>
 
+<!-- Floating Sub-Window for Sliders, Presets, Cine, and Measurement Export -->
 <div id="controlsPopover" class="controls-popover hidden">
   <div class="pop-header">
-    <span>CONTROLS &amp; WINDOWING</span>
+    <span>CONTROLS &amp; QUANTITATIVE TOOLS</span>
     <button id="btnCloseControls" class="pop-close">✕</button>
   </div>
+
   <div class="sliders">
     <div class="slider-row"><span>Axial (Z)</span><input type="range" id="slZ" min="0" max="0" value="0" /><span class="val-readout" id="valZ">0/0</span></div>
     <div class="slider-row"><span style="color:var(--cor);">Coronal (Y)</span><input type="range" id="slY" min="0" max="0" value="0" style="accent-color:var(--cor);" /><span class="val-readout" id="valY">0/0</span></div>
@@ -173,6 +232,15 @@
     <div class="slider-row"><span>Black Point</span><input type="range" id="slMin" step="any" min="0" max="1" value="0" /><span class="val-readout" id="valMin">0</span></div>
     <div class="slider-row"><span>White Point</span><input type="range" id="slMax" step="any" min="0" max="1" value="1" /><span class="val-readout" id="valMax">1</span></div>
   </div>
+
+  <div class="sec-lbl">CT Hounsfield (HU) &amp; Window Presets</div>
+  <div class="preset-grid">
+    <button class="preset-btn" data-wl="40,80">Brain</button>
+    <button class="preset-btn" data-wl="-600,1500">Lung</button>
+    <button class="preset-btn" data-wl="300,2000">Bone</button>
+    <button class="preset-btn" data-wl="40,400">Soft Tiss</button>
+  </div>
+
   <div class="cmap-row">
     <span style="color:var(--gold);font-weight:700;">COLORMAP</span>
     <select id="cmapSelect" style="flex:1;background:var(--widget);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:5px;">
@@ -181,26 +249,84 @@
       <option value="viridis">Viridis</option>
       <option value="bone">Bone</option>
     </select>
+    <button id="btnInvert" style="width:auto;padding:5px 9px;" title="Invert Grayscale (I)">Invert</button>
   </div>
+
+  <div class="sec-lbl">Cine Loop Playback</div>
+  <div class="slider-row" style="grid-template-columns: 78px 1fr 48px;">
+    <select id="cinePlaneSelect" style="background:var(--widget);color:var(--text);border:1px solid var(--border);padding:3px 4px;border-radius:4px;font-size:11px;">
+      <option value="Axial">Axial</option>
+      <option value="Coronal">Coronal</option>
+      <option value="Sagittal">Sagittal</option>
+    </select>
+    <input type="range" id="slFps" min="1" max="30" value="10" />
+    <span class="val-readout" id="valFps">10 fps</span>
+  </div>
+
   <div class="actions">
     <button id="btnCenter">Center Cuts (C)</button>
     <button id="btnAutoWin">Auto Window (R)</button>
-    <button id="btnTags" class="span-2">Inspect DICOM Tags</button>
+    <button id="btnResetZoom">Reset Zoom/Pan</button>
+    <button id="btnUndoOverlayPop">Undo Last (⌘Z)</button>
+    <button id="btnClearOverlaysPop">Clear All (Esc)</button>
+    <button id="btnExportCsv">Export CSV (<span id="logCount">0</span>)</button>
+  </div>
+
+  <div class="hint-box">
+    <b>Multi-Annotation &amp; Shortcuts:</b><br/>
+    • Draw multiple Boxes, Ellipses &amp; Rulers per slice; each is auto-numbered.<br/>
+    • <b>Cmd/Ctrl+Z:</b> Undo last shape &nbsp;|&nbsp; <b>Esc:</b> Clear all shapes<br/>
+    • <b>Scroll:</b> Step slice &nbsp;|&nbsp; <b>Cmd/Ctrl+Scroll or Pinch:</b> Zoom<br/>
+    • <b>Alt/Option + Drag:</b> Live Window/Level &nbsp;|&nbsp; <b>Shift + Drag:</b> Pan
   </div>
 </div>
 
+<!-- Scan Parameters & Metadata Modal -->
 <dialog id="tagModal">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <strong style="color:var(--gold);">DICOM Header Metadata</strong>
-    <button onclick="document.getElementById('tagModal').close()">Close</button>
+  <div class="modal-top">
+    <strong style="color:var(--gold);" id="paramModalTitle">Scan Acquisition Parameters &amp; Metadata</strong>
+    <button class="pop-close" onclick="document.getElementById('tagModal').close()">✕ Close</button>
   </div>
-  <pre id="tagContent"></pre>
+  <div class="tab-bar">
+    <div style="display:flex;gap:6px;">
+      <button id="tabBtnParams" class="tab-btn active">Scan Parameters</button>
+      <button id="tabBtnRaw" class="tab-btn">All Header Tags</button>
+    </div>
+    <label style="font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px;cursor:pointer;">
+      <input type="checkbox" id="chkRedactPhi" checked /> Redact PHI Tags
+    </label>
+  </div>
+  <div id="tabPanelParams" class="tab-panel">
+    <div id="paramGrid" class="param-grid"></div>
+  </div>
+  <div id="tabPanelRaw" class="tab-panel hidden">
+    <input type="text" id="tagSearch" class="tag-search" placeholder="Filter tags by keyword or hex (e.g., Echo, 0018, Repetition, pixdim)..." />
+    <pre id="tagContent"></pre>
+  </div>
 </dialog>
 
 <script>
 const studies = new Map();
 let activeId = null;
-const state = { z: 0, y: 0, x: 0, roiStats: "Drag box on any view for ROI stats", roi: null, cursorStr: "" };
+
+const state = {
+  z: 0, y: 0, x: 0,
+  tool: "box", // "box" | "ellipse" | "ruler" | "pan"
+  invert: false,
+  roiStats: "Drag on any view to add boxes, ellipses, or rulers",
+  annotations: [],      // committed annotations for active study
+  draftAnnotation: null,// live preview while dragging
+  nextAnnId: 1,
+  cursorStr: "",
+  view: {
+    Axial:    { zoom: 1, panX: 0, panY: 0 },
+    Coronal:  { zoom: 1, panX: 0, panY: 0 },
+    Sagittal: { zoom: 1, panX: 0, panY: 0 }
+  },
+  cineTimer: null,
+  cinePlane: "Axial"
+};
+
 const els = {
   hud: document.getElementById("hud"), studyList: document.getElementById("studyList"),
   studiesDrawer: document.getElementById("studiesDrawer"),
@@ -213,6 +339,247 @@ const els = {
   valZ: document.getElementById("valZ"), valY: document.getElementById("valY"), valX: document.getElementById("valX"),
   valMin: document.getElementById("valMin"), valMax: document.getElementById("valMax"),
 };
+
+function updateAnnCount() {
+  const el = document.getElementById("logCount");
+  if (el) el.textContent = state.annotations.length;
+}
+
+function undoLastOverlay() {
+  if (!state.annotations.length) return;
+  const removed = state.annotations.pop();
+  updateAnnCount();
+  if (state.annotations.length > 0) {
+    const last = state.annotations[state.annotations.length - 1];
+    state.roiStats = last.summary;
+  } else {
+    state.nextAnnId = 1;
+    state.roiStats = "Drag on any view to add boxes, ellipses, or rulers";
+  }
+  renderAll();
+}
+
+function clearOverlays() {
+  state.annotations = [];
+  state.draftAnnotation = null;
+  state.nextAnnId = 1;
+  updateAnnCount();
+  state.roiStats = "Drag on any view to add boxes, ellipses, or rulers";
+  renderAll();
+}
+
+document.getElementById("btnUndoOverlay").onclick = undoLastOverlay;
+document.getElementById("btnUndoOverlayPop").onclick = undoLastOverlay;
+document.getElementById("btnClearOverlays").onclick = clearOverlays;
+document.getElementById("btnClearOverlaysPop").onclick = clearOverlays;
+
+// Tool Switcher
+document.querySelectorAll(".tool-btn[data-tool]").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll(".tool-btn[data-tool]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.tool = btn.dataset.tool;
+    const cur = state.tool === "pan" ? "grab" : "crosshair";
+    [els.cvAx, els.cvCor, els.cvSag].forEach(c => c.style.cursor = cur);
+  };
+});
+
+// DICOM Dictionary & PHI Redaction
+const DICOM_TAG_NAMES = {
+  x00080008: "ImageType", x00080016: "SOPClassUID", x00080020: "StudyDate", x00080021: "SeriesDate",
+  x00080022: "AcquisitionDate", x00080030: "StudyTime", x00080031: "SeriesTime", x00080032: "AcquisitionTime",
+  x00080060: "Modality", x00080070: "Manufacturer", x00080080: "InstitutionName", x00081030: "StudyDescription",
+  x0008103e: "SeriesDescription", x00081090: "ManufacturerModelName",
+  x00100010: "PatientName", x00100020: "PatientID", x00100030: "PatientBirthDate", x00100040: "PatientSex",
+  x00180010: "ContrastBolusAgent", x00180015: "BodyPartExamined", x00180020: "ScanningSequence",
+  x00180021: "SequenceVariant", x00180022: "ScanOptions", x00180023: "MRAcquisitionType",
+  x00180024: "SequenceName", x00180050: "SliceThickness", x00180060: "KVP", x00180080: "RepetitionTime (TR)",
+  x00180081: "EchoTime (TE)", x00180082: "InversionTime (TI)", x00180083: "NumberOfAverages",
+  x00180084: "ImagingFrequency", x00180085: "ImagedNucleus", x00180086: "EchoNumbers",
+  x00180087: "MagneticFieldStrength", x00180088: "SpacingBetweenSlices", x00180089: "NumberOfPhaseEncodingSteps",
+  x00180091: "EchoTrainLength", x00180093: "PercentSampling", x00180094: "PercentPhaseFieldOfView",
+  x00180095: "PixelBandwidth", x00181020: "SoftwareVersions", x00181030: "ProtocolName",
+  x00181088: "HeartRate", x00181150: "ExposureTime", x00181151: "XRayTubeCurrent",
+  x00181250: "ReceiveCoilName", x00181251: "TransmitCoilName", x00181310: "AcquisitionMatrix",
+  x00181312: "InPlanePhaseEncodingDirection", x00181314: "FlipAngle", x00181315: "VariableFlipAngleFlag",
+  x00181316: "SAR", x00185100: "PatientPosition", x00189073: "AcquisitionDuration",
+  x00200011: "SeriesNumber", x00200012: "AcquisitionNumber", x00200013: "InstanceNumber",
+  x00200032: "ImagePositionPatient", x00200037: "ImageOrientationPatient", x00201041: "SliceLocation",
+  x00280002: "SamplesPerPixel", x00280004: "PhotometricInterpretation", x00280008: "NumberOfFrames",
+  x00280010: "Rows", x00280011: "Columns", x00280030: "PixelSpacing",
+  x00280100: "BitsAllocated", x00280101: "BitsStored", x00280103: "PixelRepresentation",
+  x00281050: "WindowCenter", x00281051: "WindowWidth", x00281052: "RescaleIntercept", x00281053: "RescaleSlope"
+};
+
+const PHI_KEYS = new Set(["x00080080", "x00080081", "x00080090", "x00081048", "x00081050", "x00081070"]);
+
+function isPhiTag(k) {
+  return k.startsWith("x0010") || PHI_KEYS.has(k);
+}
+
+function formatDicomTime(tm) {
+  if (!tm) return null;
+  const clean = tm.trim();
+  if (clean.length < 6) return clean;
+  return `${clean.slice(0, 2)}:${clean.slice(2, 4)}:${clean.slice(4)}`;
+}
+
+function formatDicomDate(dt) {
+  if (!dt) return null;
+  const clean = dt.trim();
+  return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}` : clean;
+}
+
+function findTagString(ds, tagKey) {
+  const direct = ds.string(tagKey);
+  if (direct && direct.trim()) return direct.trim();
+  for (const k in ds.elements) {
+    const el = ds.elements[k];
+    if (el && el.items && el.items.length > 0) {
+      for (const item of el.items) {
+        if (item.dataSet) {
+          const nested = findTagString(item.dataSet, tagKey);
+          if (nested) return nested;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function extractScanParameters(ds, meta) {
+  const get = (tag, suffix = "") => {
+    const val = findTagString(ds, tag);
+    return val ? `${val}${suffix}` : null;
+  };
+  const getNum = (tag, unit = "", digits = 2) => {
+    const val = findTagString(ds, tag);
+    if (!val) return null;
+    const num = parseFloat(val);
+    return isNaN(num) ? val : `${Number(num.toFixed(digits))}${unit}`;
+  };
+
+  const acqDate = formatDicomDate(findTagString(ds, "x00080022") || findTagString(ds, "x00080021") || findTagString(ds, "x00080020"));
+  const acqTime = formatDicomTime(findTagString(ds, "x00080032") || findTagString(ds, "x00080031") || findTagString(ds, "x00080030"));
+
+  return [
+    {
+      title: "Pulse Sequence & Timing",
+      rows: [
+        ["Sequence Name", get("x00180024") || get("x00180020")],
+        ["Sequence Variant", get("x00180021")],
+        ["Scan Options", get("x00180022")],
+        ["Acquisition Type", get("x00180023")],
+        ["Repetition Time (TR)", getNum("x00180080", " ms", 2)],
+        ["Echo Time (TE)", getNum("x00180081", " ms", 2)],
+        ["Inversion Time (TI)", getNum("x00180082", " ms", 2)],
+        ["Flip Angle", getNum("x00181314", "°", 1)],
+        ["Echo Train Length (ETL)", get("x00180091")],
+        ["Echo Number(s)", get("x00180086")],
+        ["Number of Averages (NEX)", getNum("x00180083", "", 1)],
+      ]
+    },
+    {
+      title: "Acquisition & Timing Info",
+      rows: [
+        ["Acquisition Date", acqDate],
+        ["Acquisition Time", acqTime],
+        ["Acquisition Duration", getNum("x00189073", " s", 1)],
+        ["Body Part Examined", get("x00180015")],
+        ["Protocol Name", get("x00181030")],
+        ["Series Description", get("x0008103e")],
+        ["Series / Acq Number", [get("x00200011"), get("x00200012")].filter(Boolean).join(" / ") || null],
+        ["Contrast Agent", get("x00180010")],
+        ["Heart Rate", getNum("x00181088", " bpm", 0)],
+      ]
+    },
+    {
+      title: "Spatial Geometry & Matrix",
+      rows: [
+        ["Volume Dimensions (X×Y×Z)", `${meta.nx} × ${meta.ny} × ${meta.nz} vox`],
+        ["Voxel Spacing (X×Y×Z)", `${meta.spX.toFixed(2)} × ${meta.spY.toFixed(2)} × ${meta.spZ.toFixed(2)} mm`],
+        ["Slice Thickness", getNum("x00180050", " mm", 2)],
+        ["Slice Spacing", getNum("x00180088", " mm", 2)],
+        ["Phase Encoding Dir", get("x00181312")],
+        ["Percent Sampling / FOV", [getNum("x00180093", "%", 0), getNum("x00180094", "%", 0)].filter(Boolean).join(" / ") || null],
+        ["Pixel Bandwidth", getNum("x00180095", " Hz/px", 0)],
+        ["Patient Position", get("x00185100")],
+      ]
+    },
+    {
+      title: "Scanner Hardware & Safety",
+      rows: [
+        ["Modality", get("x00080060")],
+        ["Manufacturer", get("x00080070")],
+        ["Scanner Model", get("x00081090")],
+        ["Field Strength", getNum("x00180087", " T", 2)],
+        ["Imaging Frequency", getNum("x00180084", " MHz", 3)],
+        ["Receive Coil", get("x00181250")],
+        ["Transmit Coil", get("x00181251")],
+        ["SAR", getNum("x00181316", " W/kg", 3)],
+        ["kVp / Tube Current", [getNum("x00180060", " kVp", 0), getNum("x00181151", " mA", 0)].filter(Boolean).join(" / ") || null],
+        ["Software Version", get("x00181020")],
+      ]
+    }
+  ];
+}
+
+function getFilteredHeaderText(st) {
+  const redact = document.getElementById("chkRedactPhi").checked;
+  const q = document.getElementById("tagSearch").value.toLowerCase().trim();
+  const lines = redact ? st.headerLinesRedacted : st.headerLinesFull;
+  if (!q) return lines.join("\n");
+  const filtered = lines.filter(l => l.toLowerCase().includes(q));
+  return filtered.length ? filtered.join("\n") : "No matching header tags.";
+}
+
+function openParametersModal(defaultTab = "params") {
+  const st = studies.get(activeId);
+  if (!st) {
+    alert("Load a study first to inspect its scan parameters.");
+    return;
+  }
+  document.getElementById("paramModalTitle").textContent = `${st.label} — Scan Parameters`;
+  const grid = document.getElementById("paramGrid");
+  grid.innerHTML = "";
+
+  for (const group of st.paramGroups) {
+    const validRows = group.rows.filter(([, val]) => val !== null && val !== "");
+    if (!validRows.length) continue;
+    const card = document.createElement("div");
+    card.className = "param-group";
+    const h4 = document.createElement("h4");
+    h4.textContent = group.title;
+    card.appendChild(h4);
+
+    for (const [k, v] of validRows) {
+      const row = document.createElement("div");
+      row.className = "param-row";
+      row.innerHTML = `<span class="param-k">${k}</span><span class="param-v">${v}</span>`;
+      card.appendChild(row);
+    }
+    grid.appendChild(card);
+  }
+
+  document.getElementById("tagSearch").value = "";
+  document.getElementById("tagContent").textContent = getFilteredHeaderText(st);
+  switchParamTab(defaultTab);
+  document.getElementById("tagModal").showModal();
+}
+
+function switchParamTab(tab) {
+  const isParams = tab === "params";
+  document.getElementById("tabBtnParams").classList.toggle("active", isParams);
+  document.getElementById("tabBtnRaw").classList.toggle("active", !isParams);
+  document.getElementById("tabPanelParams").classList.toggle("hidden", !isParams);
+  document.getElementById("tabPanelRaw").classList.toggle("hidden", isParams);
+}
+
+document.getElementById("tabBtnParams").onclick = () => switchParamTab("params");
+document.getElementById("tabBtnRaw").onclick = () => switchParamTab("raw");
+document.getElementById("btnToggleParams").onclick = () => openParametersModal("params");
+document.getElementById("tagSearch").oninput = () => { const st = studies.get(activeId); if (st) document.getElementById("tagContent").textContent = getFilteredHeaderText(st); };
+document.getElementById("chkRedactPhi").onchange = () => { const st = studies.get(activeId); if (st) document.getElementById("tagContent").textContent = getFilteredHeaderText(st); };
 
 function toggleStudiesDrawer(forceState = null) {
   const shouldOpen = forceState !== null ? forceState : els.studiesDrawer.classList.contains("collapsed");
@@ -264,7 +631,109 @@ function dominantAxis(vec) {
   return { axis, sign: vec[axis] >= 0 ? 1 : -1 };
 }
 
-// Expand any .zip archives into raw ArrayBuffer entries alongside regular files
+async function gunzipBuffer(buf) {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("Browser does not support DecompressionStream for .nii.gz");
+  }
+  const ds = new DecompressionStream("gzip");
+  const writer = ds.writable.getWriter();
+  writer.write(new Uint8Array(buf));
+  writer.close();
+  return await new Response(ds.readable).arrayBuffer();
+}
+
+async function parseNiftiBuffer(name, rawBuf) {
+  const bytes = new Uint8Array(rawBuf);
+  const isGz = (bytes[0] === 0x1f && bytes[1] === 0x8b) || name.toLowerCase().endsWith(".gz");
+  const buf = isGz ? await gunzipBuffer(rawBuf) : rawBuf;
+  const view = new DataView(buf);
+
+  let hdrSize = view.getInt32(0, true);
+  let littleEndian = true;
+  if (hdrSize !== 348 && hdrSize !== 540) {
+    hdrSize = view.getInt32(0, false);
+    littleEndian = false;
+  }
+  if (hdrSize !== 348) throw new Error("Unsupported NIfTI header size");
+
+  const ndim = view.getInt16(40, littleEndian);
+  const nx = view.getInt16(42, littleEndian);
+  const ny = view.getInt16(44, littleEndian);
+  const nz = Math.max(1, view.getInt16(46, littleEndian));
+  const datatype = view.getInt16(70, littleEndian);
+  const spX = Math.abs(view.getFloat32(80, littleEndian)) || 1.0;
+  const spY = Math.abs(view.getFloat32(84, littleEndian)) || 1.0;
+  const spZ = Math.abs(view.getFloat32(88, littleEndian)) || 1.0;
+  const voxOffset = Math.max(352, Math.floor(view.getFloat32(108, littleEndian)));
+  let sclSlope = view.getFloat32(112, littleEndian);
+  const sclInter = view.getFloat32(116, littleEndian);
+  if (!sclSlope || isNaN(sclSlope)) sclSlope = 1.0;
+
+  const descBytes = new Uint8Array(buf, 148, 80);
+  const desc = new TextDecoder().decode(descBytes).replace(/\0/g, "").trim() || name;
+
+  const totalVox = nx * ny * nz;
+  const volume = new Float32Array(totalVox);
+  let minVal = Infinity, maxVal = -Infinity;
+
+  for (let i = 0; i < totalVox; i++) {
+    let raw = 0;
+    if (datatype === 2) raw = view.getUint8(voxOffset + i);
+    else if (datatype === 4) raw = view.getInt16(voxOffset + i * 2, littleEndian);
+    else if (datatype === 8) raw = view.getInt32(voxOffset + i * 4, littleEndian);
+    else if (datatype === 16) raw = view.getFloat32(voxOffset + i * 4, littleEndian);
+    else if (datatype === 64) raw = view.getFloat64(voxOffset + i * 8, littleEndian);
+    else if (datatype === 512) raw = view.getUint16(voxOffset + i * 2, littleEndian);
+    else if (datatype === 768) raw = view.getUint32(voxOffset + i * 4, littleEndian);
+    const val = raw * sclSlope + sclInter;
+    if (val < minVal) minVal = val;
+    if (val > maxVal) maxVal = val;
+    volume[i] = val;
+  }
+
+  const oriented = new Float32Array(totalVox);
+  for (let z = 0; z < nz; z++) {
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; x++) {
+        const srcIdx = z * ny * nx + (ny - 1 - y) * nx + (nx - 1 - x);
+        oriented[z * ny * nx + y * nx + x] = volume[srcIdx];
+      }
+    }
+  }
+
+  const cleanLabel = name.replace(/\.nii(\.gz)?$/i, "");
+  const headerLines = [
+    `Format: NIfTI-1 (${littleEndian ? "Little Endian" : "Big Endian"})`,
+    `Dimensions (dim[1..3]): ${nx} x ${ny} x ${nz} (ndim=${ndim})`,
+    `Voxel Spacing (pixdim[1..3]): ${spX.toFixed(3)} x ${spY.toFixed(3)} x ${spZ.toFixed(3)} mm`,
+    `Datatype Code: ${datatype}`,
+    `Voxel Offset: ${voxOffset} bytes`,
+    `Scaling: slope=${sclSlope}, intercept=${sclInter}`,
+    `Description: ${desc}`
+  ];
+
+  const paramGroups = [
+    {
+      title: "NIfTI Volume Geometry",
+      rows: [
+        ["Format", "NIfTI-1 Volume"],
+        ["Matrix Size (X×Y×Z)", `${nx} × ${ny} × ${nz} vox`],
+        ["Voxel Spacing (X×Y×Z)", `${spX.toFixed(2)} × ${spY.toFixed(2)} × ${spZ.toFixed(2)} mm`],
+        ["Intensity Range", `${minVal.toFixed(1)} to ${maxVal.toFixed(1)}`],
+        ["Description", desc]
+      ]
+    }
+  ];
+
+  const id = String(Date.now()) + Math.random();
+  studies.set(id, {
+    id, label: `${cleanLabel} (NIfTI, ${nz} sl)`, volume: oriented, nz, ny, nx, minVal, maxVal,
+    spX, spY, spZ, modality: "NIfTI", seriesDesc: desc,
+    headerLinesFull: headerLines, headerLinesRedacted: headerLines, paramGroups
+  });
+  selectStudy(id);
+}
+
 async function expandInputs(fileList, overrideFolderName = null) {
   const rawFiles = Array.from(fileList).filter(f => !f.name.startsWith(".") && f.name !== "DICOMDIR");
   const items = [];
@@ -272,10 +741,7 @@ async function expandInputs(fileList, overrideFolderName = null) {
 
   for (const file of rawFiles) {
     if (file.name.toLowerCase().endsWith(".zip")) {
-      if (!window.JSZip) {
-        alert("JSZip library failed to load (check internet connection).");
-        continue;
-      }
+      if (!window.JSZip) { alert("JSZip library failed to load."); continue; }
       if (!folderName) folderName = file.name.replace(/\.zip$/i, "");
       els.hud.textContent = `UNZIPPING  |  Extracting ${file.name}...`;
       const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
@@ -293,19 +759,34 @@ async function expandInputs(fileList, overrideFolderName = null) {
       items.push({ name: file.name, buf: await file.arrayBuffer() });
     }
   }
-  return { items, folderName: folderName || "DICOM Study" };
+  return { items, folderName: folderName || "Study" };
 }
 
 async function parseDicomFiles(fileList, overrideFolderName = null) {
   const { items, folderName } = await expandInputs(fileList, overrideFolderName);
   if (!items.length) return;
 
-  els.hud.textContent = `SCANNING  |  Reading ${items.length} file(s)...`;
+  const dicomItems = [];
+  for (const item of items) {
+    if (/\.nii(\.gz)?$/i.test(item.name)) {
+      try {
+        els.hud.textContent = `LOADING NIFTI  |  Parsing ${item.name}...`;
+        await parseNiftiBuffer(item.name, item.buf);
+      } catch (err) {
+        alert(`Could not read NIfTI file ${item.name}: ${err.message}`);
+      }
+    } else {
+      dicomItems.push(item);
+    }
+  }
+  if (!dicomItems.length) return;
+
+  els.hud.textContent = `SCANNING  |  Reading ${dicomItems.length} DICOM file(s)...`;
   const slices = [];
   let skipped = 0;
 
-  for (let idx = 0; idx < items.length; idx++) {
-    const { buf } = items[idx];
+  for (let idx = 0; idx < dicomItems.length; idx++) {
+    const { buf } = dicomItems[idx];
     try {
       const byteArray = new Uint8Array(buf);
       const ds = window.dicomParser.parseDicom(byteArray);
@@ -325,12 +806,17 @@ async function parseDicomFiles(fileList, overrideFolderName = null) {
       const ippStr = ds.string("x00200032");
       const ipp = ippStr ? ippStr.split("\\").map(Number) : null;
 
-      const tagLines = [];
+      const headerLinesFull = [], headerLinesRedacted = [];
       for (const k in ds.elements) {
+        if (k === "x7fe00010") continue;
         const v = ds.string(k);
-        if (v && v.length < 120) tagLines.push(`${k}: ${v}`);
+        if (v && v.length < 140) {
+          const hexFormatted = `(${k.slice(1, 5)},${k.slice(5, 9)})`;
+          const label = DICOM_TAG_NAMES[k] ? `${DICOM_TAG_NAMES[k]} ${hexFormatted}` : hexFormatted;
+          headerLinesFull.push(`${label}: ${v}`);
+          headerLinesRedacted.push(isPhiTag(k) ? `${label}: [REDACTED]` : `${label}: ${v}`);
+        }
       }
-      const headerText = tagLines.join("\n");
 
       const numPixels = rows * cols;
       const bytesPerFrame = numPixels * (bits === 8 ? 1 : 2);
@@ -353,13 +839,14 @@ async function parseDicomFiles(fileList, overrideFolderName = null) {
         slices.push({
           rows, cols, instNum: numFrames > 1 ? f : instNum, ipp: numFrames > 1 ? null : ipp,
           data: floatSlice,
-          psStr: ds.string("x00280030"),
-          spacingBetweenStr: ds.string("x00180088"),
-          thickStr: ds.string("x00180050"),
-          modStr: ds.string("x00080060"),
-          descStr: ds.string("x0008103e"),
-          iopStr: ds.string("x00200037"),
-          headerText
+          psStr: findTagString(ds, "x00280030"),
+          spacingBetweenStr: findTagString(ds, "x00180088"),
+          thickStr: findTagString(ds, "x00180050"),
+          modStr: findTagString(ds, "x00080060"),
+          descStr: findTagString(ds, "x0008103e"),
+          iopStr: findTagString(ds, "x00200037"),
+          headerLinesFull, headerLinesRedacted,
+          firstDs: slices.length === 0 ? ds : null
         });
       }
     } catch (_) {
@@ -368,8 +855,8 @@ async function parseDicomFiles(fileList, overrideFolderName = null) {
   }
 
   if (!slices.length) {
-    els.hud.textContent = "READY  |  No readable DICOM slices found.";
-    alert(`Loaded 0 slices (${skipped} files skipped). Make sure the folder or zip archive contains uncompressed .dcm images.`);
+    els.hud.textContent = "READY  |  No readable DICOM or NIfTI slices found.";
+    alert(`Loaded 0 slices (${skipped} files skipped).`);
     return;
   }
 
@@ -451,10 +938,12 @@ async function parseDicomFiles(fileList, overrideFolderName = null) {
 
   const modality = s0.modStr || "MR/CT";
   const seriesDesc = s0.descStr || folderName;
+  const paramGroups = s0.firstDs ? extractScanParameters(s0.firstDs, { nx, ny, nz, spX, spY, spZ }) : [];
   const id = String(Date.now()) + Math.random();
   studies.set(id, {
     id, label: `${folderName} (${modality}, ${nSl} sl)`, volume, nz, ny, nx, minVal, maxVal,
-    spX, spY, spZ, modality, seriesDesc, headerText: s0.headerText
+    spX, spY, spZ, modality, seriesDesc,
+    headerLinesFull: s0.headerLinesFull, headerLinesRedacted: s0.headerLinesRedacted, paramGroups
   });
   selectStudy(id);
 }
@@ -472,11 +961,22 @@ function renderStudySidebar() {
 
 window.addEventListener("resize", renderAll);
 
+function resetViewTransforms() {
+  for (const p of ["Axial", "Coronal", "Sagittal"]) {
+    state.view[p] = { zoom: 1, panX: 0, panY: 0 };
+  }
+}
+
 function selectStudy(id) {
   activeId = id; renderStudySidebar();
   const st = studies.get(activeId); if (!st) return;
   state.z = Math.floor(st.nz / 2); state.y = Math.floor(st.ny / 2); state.x = Math.floor(st.nx / 2);
-  state.roi = null; state.roiStats = "Drag box on any view for ROI stats";
+  state.annotations = [];
+  state.draftAnnotation = null;
+  state.nextAnnId = 1;
+  updateAnnCount();
+  state.roiStats = "Drag on any view to add boxes, ellipses, or rulers";
+  resetViewTransforms();
   els.slZ.max = st.nz - 1; els.slZ.value = state.z;
   els.slY.max = st.ny - 1; els.slY.value = state.y;
   els.slX.max = st.nx - 1; els.slX.value = state.x;
@@ -494,7 +994,62 @@ function autoWindow() {
   els.slMax.value = sub[Math.floor(sub.length * 0.99)];
 }
 
-function drawSlice(canvas, voxW, voxH, spW, spH, getPixel, chX, chY, planeName) {
+function drawAnnotationItem(ctx, ann, sx, sy, dpr, isDraft) {
+  if (ann.type === "box" || ann.type === "ellipse") {
+    const { x1, y1, x2, y2, id, type } = ann;
+    ctx.fillStyle = isDraft ? "rgba(57, 211, 83, 0.16)" : "rgba(57, 211, 83, 0.22)";
+    ctx.strokeStyle = isDraft ? "#7ee787" : "#39d353";
+    ctx.lineWidth = 1.5 * dpr;
+
+    if (type === "ellipse") {
+      const ecx = ((x1 + x2) / 2) * sx, ecy = ((y1 + y2) / 2) * sy;
+      const rx = ((x2 - x1) / 2) * sx, ry = ((y2 - y1) / 2) * sy;
+      ctx.beginPath();
+      ctx.ellipse(ecx, ecy, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    } else {
+      ctx.fillRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+      ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+    }
+
+    const badge = `#${id}`;
+    ctx.font = `bold ${Math.round(11 * dpr)}px -apple-system, sans-serif`;
+    const tw = ctx.measureText(badge).width;
+    const bx = Math.max(2, x1 * sx);
+    const by = Math.max(14 * dpr, y1 * sy - 3 * dpr);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
+    ctx.fillRect(bx - 2, by - 11 * dpr, tw + 6, 14 * dpr);
+    ctx.fillStyle = "#56d364";
+    ctx.fillText(badge, bx + 1, by);
+  } else if (ann.type === "ruler") {
+    const { x1, y1, x2, y2, distMm, id } = ann;
+    const px1 = (x1 + 0.5) * sx, py1 = (y1 + 0.5) * sy;
+    const px2 = (x2 + 0.5) * sx, py2 = (y2 + 0.5) * sy;
+    ctx.strokeStyle = isDraft ? "#ffa657" : "#f78166";
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(px1, py1); ctx.lineTo(px2, py2);
+    ctx.stroke();
+
+    ctx.fillStyle = "#f78166";
+    ctx.beginPath();
+    ctx.arc(px1, py1, 3 * dpr, 0, Math.PI * 2);
+    ctx.arc(px2, py2, 3 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+
+    const label = `#${id}: ${distMm.toFixed(1)} mm`;
+    ctx.font = `bold ${Math.round(11.5 * dpr)}px -apple-system, sans-serif`;
+    const tw = ctx.measureText(label).width;
+    const lx = Math.min(ctx.canvas.width - tw - 10, Math.max(6, (px1 + px2) / 2 + 6));
+    const ly = Math.max(18 * dpr, (py1 + py2) / 2 - 6);
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.fillRect(lx - 4, ly - 13 * dpr, tw + 8, 17 * dpr);
+    ctx.fillStyle = "#ffa657";
+    ctx.fillText(label, lx, ly);
+  }
+}
+
+function drawSlice(canvas, voxW, voxH, spW, spH, getPixel, chX, chY, planeName, sliceIdx) {
   canvas.dataset.voxW = voxW;
   canvas.dataset.voxH = voxH;
 
@@ -510,7 +1065,8 @@ function drawSlice(canvas, voxW, voxH, spW, spH, getPixel, chX, chY, planeName) 
   for (let row = 0; row < voxH; row++) {
     for (let col = 0; col < voxW; col++) {
       const val = getPixel(col, row);
-      const norm = Math.max(0, Math.min(255, Math.round((val - vmin) * scale)));
+      let norm = Math.max(0, Math.min(255, Math.round((val - vmin) * scale)));
+      if (state.invert) norm = 255 - norm;
       const idx = (row * voxW + col) * 4;
       data[idx] = currentLUT[norm * 3];
       data[idx + 1] = currentLUT[norm * 3 + 1];
@@ -527,14 +1083,19 @@ function drawSlice(canvas, voxW, voxH, spW, spH, getPixel, chX, chY, planeName) 
   const physH = voxH * spH;
   const fitScale = Math.min(availW / physW, availH / physH);
 
-  const dispW = Math.round(physW * fitScale);
-  const dispH = Math.round(physH * fitScale);
+  const vt = state.view[planeName];
+  const dispW = Math.round(physW * fitScale * vt.zoom);
+  const dispH = Math.round(physH * fitScale * vt.zoom);
   const dpr = window.devicePixelRatio || 1;
 
   canvas.style.width = `${dispW}px`;
   canvas.style.height = `${dispH}px`;
+  canvas.style.transform = `translate(${vt.panX}px, ${vt.panY}px)`;
   canvas.width = Math.round(dispW * dpr);
   canvas.height = Math.round(dispH * dpr);
+
+  const badgeId = planeName === "Axial" ? "zoomAx" : planeName === "Coronal" ? "zoomCor" : "zoomSag";
+  document.getElementById(badgeId).textContent = `${vt.zoom.toFixed(1)}x`;
 
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = true;
@@ -546,20 +1107,24 @@ function drawSlice(canvas, voxW, voxH, spW, spH, getPixel, chX, chY, planeName) 
   const cxPx = Math.round((chX + 0.5) * sx) + 0.5;
   const cyPx = Math.round((chY + 0.5) * sy) + 0.5;
 
-  ctx.strokeStyle = "rgba(0, 255, 255, 0.8)";
+  // Crosshairs
+  ctx.strokeStyle = "rgba(0, 255, 255, 0.78)";
   ctx.lineWidth = Math.max(1, dpr);
   ctx.beginPath();
   ctx.moveTo(0, cyPx); ctx.lineTo(canvas.width, cyPx);
   ctx.moveTo(cxPx, 0); ctx.lineTo(cxPx, canvas.height);
   ctx.stroke();
 
-  if (state.roi && state.roi.plane === planeName) {
-    const { x1, y1, x2, y2 } = state.roi;
-    ctx.fillStyle = "rgba(57, 211, 83, 0.22)";
-    ctx.strokeStyle = "#39d353";
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.fillRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
-    ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+  // Render all committed annotations belonging to this plane & slice
+  for (const ann of state.annotations) {
+    if (ann.plane === planeName && ann.sliceIdx === sliceIdx) {
+      drawAnnotationItem(ctx, ann, sx, sy, dpr, false);
+    }
+  }
+
+  // Render active draft annotation while dragging
+  if (state.draftAnnotation && state.draftAnnotation.plane === planeName && state.draftAnnotation.sliceIdx === sliceIdx) {
+    drawAnnotationItem(ctx, state.draftAnnotation, sx, sy, dpr, true);
   }
 }
 
@@ -567,9 +1132,9 @@ function renderAll() {
   const st = studies.get(activeId); if (!st) return;
   const { volume, nz, ny, nx, spX, spY, spZ } = st, { z, y, x } = state;
 
-  drawSlice(els.cvAx,  nx, ny, spX, spY, (col, row) => volume[z * ny * nx + row * nx + col], x, y, "Axial");
-  drawSlice(els.cvCor, nx, nz, spX, spZ, (col, row) => volume[(nz - 1 - row) * ny * nx + y * nx + col], x, nz - 1 - z, "Coronal");
-  drawSlice(els.cvSag, ny, nz, spY, spZ, (col, row) => volume[(nz - 1 - row) * ny * nx + col * nx + x], y, nz - 1 - z, "Sagittal");
+  drawSlice(els.cvAx,  nx, ny, spX, spY, (col, row) => volume[z * ny * nx + row * nx + col], x, y, "Axial", z);
+  drawSlice(els.cvCor, nx, nz, spX, spZ, (col, row) => volume[(nz - 1 - row) * ny * nx + y * nx + col], x, nz - 1 - z, "Coronal", y);
+  drawSlice(els.cvSag, ny, nz, spY, spZ, (col, row) => volume[(nz - 1 - row) * ny * nx + col * nx + x], y, nz - 1 - z, "Sagittal", x);
 
   document.getElementById("titleAx").textContent = `AXIAL (Z: ${z + 1}/${nz})`;
   document.getElementById("titleCor").textContent = `CORONAL (Y: ${y + 1}/${ny})`;
@@ -577,11 +1142,75 @@ function renderAll() {
   els.valZ.textContent = `${z + 1}/${nz}`; els.valY.textContent = `${y + 1}/${ny}`; els.valX.textContent = `${x + 1}/${nx}`;
   els.valMin.textContent = Math.round(els.slMin.value); els.valMax.textContent = Math.round(els.slMax.value);
   const val = volume[z * ny * nx + y * nx + x];
-  els.hud.textContent = `[${st.label}] ${st.seriesDesc} | Voxel (${x+1},${y+1},${z+1}) | Val: ${val.toFixed(1)} | ${state.roiStats} ${state.cursorStr}`;
+  els.hud.textContent = `[${st.label}] | Voxel (${x+1},${y+1},${z+1}) = ${val.toFixed(1)} | ${state.roiStats} ${state.cursorStr}`;
+}
+
+function computeMeasurement(st, plane, sliceIdx, tool, startX, startY, curX, curY, annId) {
+  if (tool === "ruler") {
+    const spW = plane === "Sagittal" ? st.spY : st.spX;
+    const spH = plane === "Axial" ? st.spY : st.spZ;
+    const distMm = Math.hypot((curX - startX) * spW, (curY - startY) * spH);
+    const distPx = Math.hypot(curX - startX, curY - startY);
+    if (distPx < 1) return null;
+    const summary = `#${annId} ${plane} Ruler: ${distMm.toFixed(2)} mm (${distPx.toFixed(1)} px)`;
+    return {
+      id: annId, type: "ruler", plane, sliceIdx,
+      x1: startX, y1: startY, x2: curX, y2: curY,
+      distMm, distPx, summary,
+      csvRow: {
+        study: st.label, id: annId, plane, tool: "Ruler", slice: sliceIdx + 1,
+        pixels: distPx.toFixed(1), area_mm2: "", length_mm: distMm.toFixed(2), mean: "", sd: "", snr: ""
+      }
+    };
+  }
+
+  const x1 = Math.min(startX, curX), x2 = Math.max(startX, curX);
+  const y1 = Math.min(startY, curY), y2 = Math.max(startY, curY);
+  if (x2 - x1 <= 1 || y2 - y1 <= 1) return null;
+
+  const isEllipse = tool === "ellipse";
+  const vals = [];
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+  const rx = (x2 - x1) / 2, ry = (y2 - y1) / 2;
+
+  for (let r = y1; r < y2; r++) {
+    for (let c = x1; c < x2; c++) {
+      if (isEllipse) {
+        const normDist = ((c + 0.5 - cx) / rx) ** 2 + ((r + 0.5 - cy) / ry) ** 2;
+        if (normDist > 1.0) continue;
+      }
+      if (plane === "Axial") vals.push(st.volume[sliceIdx * st.ny * st.nx + r * st.nx + c]);
+      if (plane === "Coronal") vals.push(st.volume[(st.nz - 1 - r) * st.ny * st.nx + sliceIdx * st.nx + c]);
+      if (plane === "Sagittal") vals.push(st.volume[(st.nz - 1 - r) * st.ny * st.nx + c * st.nx + sliceIdx]);
+    }
+  }
+  if (!vals.length) return null;
+
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+  const snr = sd > 0 ? (mean / sd).toFixed(2) : "Inf";
+  const pxArea = plane === "Axial" ? st.spX * st.spY : plane === "Coronal" ? st.spX * st.spZ : st.spY * st.spZ;
+  const area = vals.length * pxArea;
+  const tag = isEllipse ? "Ellipse" : "Box";
+  const summary = `#${annId} ${plane} ${tag} (${vals.length} px, ${area.toFixed(1)} mm²): Mean=${mean.toFixed(1)} | SD=${sd.toFixed(1)} | SNR=${snr}`;
+
+  return {
+    id: annId, type: isEllipse ? "ellipse" : "box", plane, sliceIdx,
+    x1, y1, x2, y2, summary,
+    csvRow: {
+      study: st.label, id: annId, plane, tool: tag, slice: sliceIdx + 1,
+      pixels: vals.length, area_mm2: area.toFixed(2), length_mm: "", mean: mean.toFixed(2), sd: sd.toFixed(2), snr
+    }
+  };
 }
 
 function setupCanvasInteraction(canvas, plane) {
-  let dragging = false, startX = 0, startY = 0;
+  let mode = null; // "measure" | "pan" | "wl"
+  let activePlane = null;
+  let startX = 0, startY = 0, startClientX = 0, startClientY = 0;
+  let startPanX = 0, startPanY = 0, startMin = 0, startMax = 0;
+  let pinchStartDist = 0, pinchStartZoom = 1;
+
   const getCoords = (e) => {
     const rect = canvas.getBoundingClientRect();
     const voxW = parseInt(canvas.dataset.voxW) || 1;
@@ -590,14 +1219,42 @@ function setupCanvasInteraction(canvas, plane) {
     const cy = Math.floor(((e.clientY - rect.top) / rect.height) * voxH);
     return [Math.max(0, Math.min(voxW - 1, cx)), Math.max(0, Math.min(voxH - 1, cy))];
   };
+
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault(); const st = studies.get(activeId); if (!st) return;
+    if (e.ctrlKey || e.metaKey) {
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      state.view[plane].zoom = Math.max(0.5, Math.min(12, state.view[plane].zoom * factor));
+      renderAll();
+      return;
+    }
     const step = e.deltaY < 0 ? 1 : -1;
     if (plane === "Axial") { state.z = Math.max(0, Math.min(st.nz - 1, state.z + step)); els.slZ.value = state.z; }
     if (plane === "Coronal") { state.y = Math.max(0, Math.min(st.ny - 1, state.y + step)); els.slY.value = state.y; }
     if (plane === "Sagittal") { state.x = Math.max(0, Math.min(st.nx - 1, state.x + step)); els.slX.value = state.x; }
     renderAll();
   }, { passive: false });
+
+  canvas.addEventListener("dblclick", () => {
+    state.view[plane] = { zoom: 1, panX: 0, panY: 0 };
+    renderAll();
+  });
+
+  canvas.parentElement.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      pinchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      pinchStartZoom = state.view[plane].zoom;
+    }
+  }, { passive: true });
+  canvas.parentElement.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2 && pinchStartDist > 0) {
+      e.preventDefault();
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      state.view[plane].zoom = Math.max(0.5, Math.min(12, pinchStartZoom * (dist / pinchStartDist)));
+      renderAll();
+    }
+  }, { passive: false });
+
   canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault(); const st = studies.get(activeId); if (!st) return;
     const [cx, cy] = getCoords(e);
@@ -606,38 +1263,165 @@ function setupCanvasInteraction(canvas, plane) {
     if (plane === "Sagittal") { state.y = cx; state.z = st.nz - 1 - cy; }
     els.slX.value = state.x; els.slY.value = state.y; els.slZ.value = state.z; renderAll();
   });
-  canvas.addEventListener("mousedown", (e) => { if (e.button === 0 && studies.has(activeId)) { dragging = true; [startX, startY] = getCoords(e); } });
+
+  canvas.addEventListener("mousedown", (e) => {
+    const st = studies.get(activeId); if (!st) return;
+    startClientX = e.clientX; startClientY = e.clientY;
+    activePlane = plane;
+    if (e.button === 1 || (e.button === 0 && (e.shiftKey || state.tool === "pan"))) {
+      e.preventDefault();
+      mode = "pan";
+      startPanX = state.view[plane].panX; startPanY = state.view[plane].panY;
+      canvas.style.cursor = "grabbing";
+    } else if (e.button === 0 && e.altKey) {
+      mode = "wl";
+      startMin = parseFloat(els.slMin.value); startMax = parseFloat(els.slMax.value);
+    } else if (e.button === 0) {
+      mode = "measure";
+      [startX, startY] = getCoords(e);
+      state.draftAnnotation = null;
+    }
+  });
+
   window.addEventListener("mousemove", (e) => {
     const st = studies.get(activeId); if (!st) return;
-    if (e.target === canvas) {
+    if (e.target === canvas && !mode) {
       const [cx, cy] = getCoords(e); let v = 0;
       if (plane === "Axial") v = st.volume[state.z * st.ny * st.nx + cy * st.nx + cx];
       if (plane === "Coronal") v = st.volume[(st.nz - 1 - cy) * st.ny * st.nx + state.y * st.nx + cx];
       if (plane === "Sagittal") v = st.volume[(st.nz - 1 - cy) * st.ny * st.nx + cx * st.nx + state.x];
-      state.cursorStr = `| Cursor: ${v.toFixed(1)}`; if (!dragging) renderAll();
-    }
-    if (!dragging) return;
-    const [curX, curY] = getCoords(e);
-    const x1 = Math.min(startX, curX), x2 = Math.max(startX, curX), y1 = Math.min(startY, curY), y2 = Math.max(startY, curY);
-    if (x2 - x1 > 1 && y2 - y1 > 1) {
-      state.roi = { plane, x1, y1, x2, y2 }; const vals = [];
-      for (let r = y1; r < y2; r++) for (let c = x1; c < x2; c++) {
-        if (plane === "Axial") vals.push(st.volume[state.z * st.ny * st.nx + r * st.nx + c]);
-        if (plane === "Coronal") vals.push(st.volume[(st.nz - 1 - r) * st.ny * st.nx + state.y * st.nx + c]);
-        if (plane === "Sagittal") vals.push(st.volume[(st.nz - 1 - r) * st.ny * st.nx + c * st.nx + state.x]);
-      }
-      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
-      const snr = sd > 0 ? (mean / sd).toFixed(2) : "Inf";
-      const area = plane === "Axial" ? (x2 - x1) * st.spX * (y2 - y1) * st.spY
-                 : plane === "Coronal" ? (x2 - x1) * st.spX * (y2 - y1) * st.spZ
-                 : (x2 - x1) * st.spY * (y2 - y1) * st.spZ;
-      state.roiStats = `${plane} ROI (${x2-x1}x${y2-y1} px, ${area.toFixed(1)} mm²): Mean=${mean.toFixed(1)} | SD=${sd.toFixed(1)} | SNR=${snr}`;
+      state.cursorStr = `| Cursor: ${v.toFixed(1)}`;
       renderAll();
+      return;
+    }
+    if (!mode || activePlane !== plane) return;
+
+    if (mode === "pan") {
+      state.view[plane].panX = startPanX + (e.clientX - startClientX);
+      state.view[plane].panY = startPanY + (e.clientY - startClientY);
+      renderAll();
+      return;
+    }
+
+    if (mode === "wl") {
+      const span = Math.max(1, st.maxVal - st.minVal);
+      const dxDelta = ((e.clientX - startClientX) / 250) * span;
+      const dyDelta = ((e.clientY - startClientY) / 250) * span;
+      const curCenter = (startMin + startMax) / 2 + dyDelta;
+      const curWidth = Math.max(span * 0.005, (startMax - startMin) + dxDelta);
+      els.slMin.value = Math.max(st.minVal, curCenter - curWidth / 2);
+      els.slMax.value = Math.min(st.maxVal, curCenter + curWidth / 2);
+      renderAll();
+      return;
+    }
+
+    if (mode === "measure") {
+      const [curX, curY] = getCoords(e);
+      const sliceIdx = plane === "Axial" ? state.z : plane === "Coronal" ? state.y : state.x;
+      const meas = computeMeasurement(st, plane, sliceIdx, state.tool, startX, startY, curX, curY, state.nextAnnId);
+      if (meas) {
+        state.draftAnnotation = meas;
+        state.roiStats = meas.summary;
+        renderAll();
+      }
     }
   });
-  window.addEventListener("mouseup", () => { dragging = false; });
+
+  window.addEventListener("mouseup", () => {
+    if (activePlane !== plane) return;
+    if (mode === "pan") canvas.style.cursor = state.tool === "pan" ? "grab" : "crosshair";
+    if (mode === "measure" && state.draftAnnotation) {
+      state.annotations.push(state.draftAnnotation);
+      state.nextAnnId++;
+      updateAnnCount();
+      state.draftAnnotation = null;
+      renderAll();
+    }
+    mode = null;
+    activePlane = null;
+  });
 }
+
+// Cine Loop Playback
+function setCinePlane(p) {
+  state.cinePlane = p;
+  document.getElementById("cinePlaneSelect").value = p;
+  document.getElementById("cardAx").classList.toggle("cine-active", p === "Axial");
+  document.getElementById("cardCor").classList.toggle("cine-active", p === "Coronal");
+  document.getElementById("cardSag").classList.toggle("cine-active", p === "Sagittal");
+}
+
+document.getElementById("titleAx").onclick = () => setCinePlane("Axial");
+document.getElementById("titleCor").onclick = () => setCinePlane("Coronal");
+document.getElementById("titleSag").onclick = () => setCinePlane("Sagittal");
+document.getElementById("cinePlaneSelect").onchange = (e) => setCinePlane(e.target.value);
+
+function toggleCine() {
+  const btn = document.getElementById("btnCineQuick");
+  if (state.cineTimer) {
+    clearInterval(state.cineTimer);
+    state.cineTimer = null;
+    btn.textContent = "▶ Cine";
+    btn.classList.remove("active");
+    return;
+  }
+  const st = studies.get(activeId); if (!st) return;
+  const fps = parseInt(document.getElementById("slFps").value) || 10;
+  btn.textContent = "⏸ Pause";
+  btn.classList.add("active");
+  state.cineTimer = setInterval(() => {
+    const cur = studies.get(activeId); if (!cur) return;
+    if (state.cinePlane === "Axial") { state.z = (state.z + 1) % cur.nz; els.slZ.value = state.z; }
+    else if (state.cinePlane === "Coronal") { state.y = (state.y + 1) % cur.ny; els.slY.value = state.y; }
+    else { state.x = (state.x + 1) % cur.nx; els.slX.value = state.x; }
+    renderAll();
+  }, Math.round(1000 / fps));
+}
+
+document.getElementById("btnCineQuick").onclick = toggleCine;
+document.getElementById("slFps").oninput = (e) => {
+  document.getElementById("valFps").textContent = `${e.target.value} fps`;
+  if (state.cineTimer) { toggleCine(); toggleCine(); }
+};
+
+// CT Hounsfield Presets & Invert
+document.querySelectorAll(".preset-btn").forEach(btn => {
+  btn.onclick = () => {
+    const st = studies.get(activeId); if (!st) return;
+    const [wl, ww] = btn.dataset.wl.split(",").map(Number);
+    els.slMin.value = Math.max(st.minVal, wl - ww / 2);
+    els.slMax.value = Math.min(st.maxVal, wl + ww / 2);
+    renderAll();
+  };
+});
+
+document.getElementById("btnInvert").onclick = (e) => {
+  state.invert = !state.invert;
+  e.target.classList.toggle("active", state.invert);
+  renderAll();
+};
+
+document.getElementById("btnResetZoom").onclick = () => { resetViewTransforms(); renderAll(); };
+
+// Export All Active Boxes, Ellipses, and Rulers to CSV
+document.getElementById("btnExportCsv").onclick = () => {
+  if (!state.annotations.length) {
+    alert("No boxes, ellipses, or rulers drawn yet. Draw one or more measurements on any slice first.");
+    return;
+  }
+  const headers = ["Study", "ID", "Plane", "Tool", "Slice", "Pixels", "Area_mm2", "Length_mm", "Mean", "SD", "SNR"];
+  const rows = state.annotations.map(a => {
+    const m = a.csvRow;
+    return [
+      `"${m.study.replace(/"/g, '""')}"`, m.id, m.plane, m.tool, m.slice, m.pixels, m.area_mm2, m.length_mm, m.mean, m.sd, m.snr
+    ].join(",");
+  });
+  const blob = new Blob([headers.join(",") + "\n" + rows.join("\n")], { type: "text/csv" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `imaging_measurements_${new Date().toISOString().slice(0,10)}.csv`;
+  link.click();
+};
 
 async function collectFilesFromEntries(items) {
   const files = [];
@@ -672,9 +1456,14 @@ window.addEventListener("drop", (e) => {
 
 window.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undoLastOverlay(); return; }
+  if (e.code === "Space") { e.preventDefault(); toggleCine(); return; }
+  if (e.key === "Escape") { clearOverlays(); return; }
   const k = e.key.toLowerCase();
   if (k === "s") toggleStudiesDrawer();
   else if (k === "w") toggleControlsPopover();
+  else if (k === "p") openParametersModal("params");
+  else if (k === "i") document.getElementById("btnInvert").click();
   else if (k === "c") document.getElementById("btnCenter").click();
   else if (k === "r") document.getElementById("btnAutoWin").click();
 });
@@ -693,10 +1482,6 @@ document.getElementById("btnCenter").onclick = () => {
   els.slZ.value = state.z; els.slY.value = state.y; els.slX.value = state.x; renderAll();
 };
 document.getElementById("btnAutoWin").onclick = () => { autoWindow(); renderAll(); };
-document.getElementById("btnTags").onclick = () => {
-  const st = studies.get(activeId); if (!st) return;
-  document.getElementById("tagContent").textContent = st.headerText; document.getElementById("tagModal").showModal();
-};
 document.getElementById("btnRename").onclick = () => {
   const st = studies.get(activeId); if (!st) return;
   const name = prompt("Enter a new study name:", st.label);
